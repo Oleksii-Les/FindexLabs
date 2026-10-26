@@ -181,8 +181,8 @@ while `array` buffers are restored with a single `memcpy`-like operation.
 | AND | common & common |  150   |   150  | 12.5 µs |  6.1 µs |   set x2.1 |
 | AND |  common & rare  |  150   |    1   |  5.8 µs |  1.7 µs |   set x3.4 |
 | AND |   rare & rare   |   1    |    1   |  0.2 µs |  0.4 µs | merge x2.2 |
-| OR  | common | common |  150   |   150  | 12.7 µs |  5.3 µs |   set x2.4 |
-| OR  | common |  rare  |  150   |    1   |  7.7 µs |  3.3 µs |   set x2.3 |
+| OR  | common and common |  150   |   150  | 12.7 µs |  5.3 µs |   set x2.4 |
+| OR  | common and  rare  |  150   |    1   |  7.7 µs |  3.3 µs |   set x2.3 |
 | NOT | common - common |  150   |   150  | 14.1 µs |  3.6 µs |   set x3.9 |
 | NOT |  common - rare  |  150   |    1   | 12.8 µs |  3.3 µs |   set x3.9 |
 
