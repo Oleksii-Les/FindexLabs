@@ -1,0 +1,5 @@
+[
+  {"query": "white whale", "relevant": ["moby"]},
+  {"query": "\"pride and prejudice\"", "relevant": ["pride and prejudice"]},
+  {"query": "detective AND (london OR baker) NOT dragon", "relevant": ["sherlock", "adventures"]}
+]
