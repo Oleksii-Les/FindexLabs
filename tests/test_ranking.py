@@ -11,9 +11,7 @@ from findex.scoring import BM25, Scorer, SearchResult, TfIdf
 def test_search_result_ordering():
     lo, hi = SearchResult(1.0, 7, "x"), SearchResult(2.0, 3, "y")
     assert lo < hi and sorted([hi, lo]) == [lo, hi] and max(hi, lo) is hi
-    assert SearchResult(1.0, 7, "title A") == SearchResult(
-        1.0, 7, "title B"
-    )  # title not compared
+    assert SearchResult(1.0, 7, "title A") == SearchResult(1.0, 7, "title B")  # title not compared
     with pytest.raises(FrozenInstanceError):
         lo.score = 5  # type: ignore[misc]
     assert "[3]" in str(hi) and "y" in str(hi)
@@ -35,9 +33,7 @@ def test_scorers_share_a_protocol_and_are_swappable(mk):
 def test_tfidf_formula(mk):
     ix = mk(["x y", "x", "z", "z"])  # N=4, df(x)=2
     p = Posting(0, 3)
-    assert TfIdf().score("x", p, ix) == pytest.approx(
-        (1 + math.log(3)) * math.log(4 / 2)
-    )
+    assert TfIdf().score("x", p, ix) == pytest.approx((1 + math.log(3)) * math.log(4 / 2))
     assert TfIdf(sublinear=False).score("x", p, ix) == pytest.approx(3 * math.log(2))
     assert TfIdf().score("nope", p, ix) == 0.0
 
@@ -50,13 +46,9 @@ def test_bm25_formula_and_parameters(mk):
     assert BM25().score("x", p, ix) == pytest.approx(idf * 2 * 2.5 / (2 + 1.5 * norm))
     # b = 0: document length is ignored
     s0 = BM25(b=0)
-    assert s0.score("x", Posting(0, 1), ix) == pytest.approx(
-        s0.score("x", Posting(1, 1), ix)
-    )
+    assert s0.score("x", Posting(0, 1), ix) == pytest.approx(s0.score("x", Posting(1, 1), ix))
     # b = 1: the longer document is penalized
-    assert BM25(b=1).score("x", Posting(0, 1), ix) < BM25(b=1).score(
-        "x", Posting(1, 1), ix
-    )
+    assert BM25(b=1).score("x", Posting(0, 1), ix) < BM25(b=1).score("x", Posting(1, 1), ix)
     assert BM25() == BM25(1.5, 0.75) and "k1=1.5" in repr(BM25())
     for bad in ({"k1": -1}, {"b": 1.5}, {"b": -0.1}):
         with pytest.raises(ValueError):
@@ -106,9 +98,7 @@ def test_search_returns_topk_best_first(mk):
     ix = mk(["a " * n + "pad" for n in range(1, 8)] + ["b"] * 3, positions=False)
     top3 = search(ix, "a", k=3)
     assert [r.doc_id for r in top3] == [6, 5, 4]
-    assert (
-        top3 == sorted(search(ix, "a", k=100), reverse=True)[:3]
-    )  # nlargest == sorted()[:k]
+    assert top3 == sorted(search(ix, "a", k=100), reverse=True)[:3]  # nlargest == sorted()[:k]
     assert search(ix, "zebra") == [] and search(ix, "a", k=0) == []
 
 
@@ -117,9 +107,7 @@ def test_search_matches_only_boolean_hits_and_handles_not(mk):
     assert {r.doc_id for r in search(ix, "cat NOT dog")} == {1}
     assert {r.doc_id for r in search(ix, "cat OR dog")} == {0, 1, 2}
     only_not = search(ix, "NOT cat")
-    assert {r.doc_id for r in only_not} == {2, 3} and all(
-        r.score == 0 for r in only_not
-    )
+    assert {r.doc_id for r in only_not} == {2, 3} and all(r.score == 0 for r in only_not)
 
 
 def test_engine_cache_hit_is_logged(mk, caplog):
@@ -127,7 +115,7 @@ def test_engine_cache_hit_is_logged(mk, caplog):
 
     ix = mk(["cat dog", "cat"], positions=False)
     eng = SearchEngine(ix, cache_size=8)
-    with caplog.at_level(logging.INFO):
+    with caplog.at_level(logging.DEBUG):
         first = eng.search("cat", snippets=False)
         second = eng.search("cat", snippets=False)
         eng.search("dog", snippets=False)

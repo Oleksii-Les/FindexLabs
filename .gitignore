@@ -1,8 +1,9 @@
-data/
-.venv/
-__pycache__/
+*.bin
+*.pkl
 *.pyc
 .pytest_cache/
 .ruff_cache/
-*.bin
-*.pkl
+.venv/
+__pycache__/
+data/
+dist/

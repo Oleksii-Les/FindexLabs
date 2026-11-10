@@ -6,15 +6,16 @@ Usage:  python -m findex.stats data/ [--limit N] [--top 50]
 from __future__ import annotations
 
 import argparse
-import logging
 import time
 import tracemalloc
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
 from itertools import islice
 from pathlib import Path
 
 from findex.corpus import iter_documents
+from findex.logging_setup import configure_logging
 from findex.tokenize import tokenize
 
 
@@ -42,7 +43,7 @@ def compute_stats(root: Path, limit: int | None = None) -> CorpusStats:
     return CorpusStats(n_docs, counts.total(), len(counts), counts)
 
 
-def measure(fn, *args, **kwargs):
+def measure[**P, T](fn: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> tuple[T, float, int]:
     """Run fn under tracemalloc; return (result, elapsed_s, peak_bytes).
 
     Note: tracemalloc slows code down, so this elapsed time is inflated.
@@ -66,15 +67,11 @@ def fmt_bytes(n: float) -> str:
 
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="python -m findex.stats")
-    ap.add_argument(
-        "root", type=Path, help="directory of .txt files or a .jsonl[.gz] file"
-    )
-    ap.add_argument(
-        "--limit", type=int, default=None, help="only the first N documents"
-    )
+    ap.add_argument("root", type=Path, help="directory of .txt files or a .jsonl[.gz] file")
+    ap.add_argument("--limit", type=int, default=None, help="only the first N documents")
     ap.add_argument("--top", type=int, default=50)
     args = ap.parse_args(argv)
-    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
+    configure_logging(0)
 
     stats, elapsed, peak = measure(compute_stats, args.root, args.limit)
 

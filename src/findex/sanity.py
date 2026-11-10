@@ -13,12 +13,12 @@ import sys
 from pathlib import Path
 
 from findex.engine import search
-from findex.model import Index, Posting
-from findex.scoring import BM25, TfIdf
+from findex.model import Index, Posting, PostingView
+from findex.scoring import BM25, Scorer, TfIdf
 from findex.store import open_index
 
 
-def posting_of(index: Index, term: str, doc_id: int) -> Posting:
+def posting_of(index: Index, term: str, doc_id: int) -> PostingView:
     return next(p for p in index[term] if p.doc_id == doc_id)
 
 
@@ -26,9 +26,7 @@ def check_rare_beats_common(index: Index, bm25: BM25) -> None:
     n = index.num_docs
     words = [t for t in index if t.isalpha()]
     rare_terms = sorted(t for t in words if 1 <= index.df(t) <= 3)
-    common_terms = sorted(
-        (t for t in words if index.df(t) < 0.9 * n), key=lambda t: -index.df(t)
-    )
+    common_terms = sorted((t for t in words if index.df(t) < 0.9 * n), key=lambda t: -index.df(t))
     print("### Check 1 -- a rare term outranks a common one\n")
     if not rare_terms or not common_terms:
         print("_not enough variety in the vocabulary to pick terms_\n")
@@ -59,9 +57,7 @@ def check_rare_beats_common(index: Index, bm25: BM25) -> None:
     pool = cands or only_common
     b = min(pool, key=lambda d: abs(index.doc_length(d) - index.doc_length(a)))
     tf_b = posting_of(index, common, b).tf
-    ranking = {
-        r.doc_id: i for i, r in enumerate(search(index, f"{rare} OR {common}", k=n), 1)
-    }
+    ranking = {r.doc_id: i for i, r in enumerate(search(index, f"{rare} OR {common}", k=n), 1)}
     s_a = bm25.score(rare, posting_of(index, rare, a), index)
     s_b = bm25.score(common, posting_of(index, common, b), index)
     print(
@@ -105,10 +101,8 @@ def check_saturation(index: Index, bm25: BM25, tfidf: TfIdf) -> None:
             f"| {tf} | {bm25.score(term, p, index):.4f} | {tfidf.score(term, p, index):.4f} | {raw.score(term, p, index):.4f} |"
         )
 
-    def gain(s, a, b):
-        return s.score(term, Posting(doc, b), index) - s.score(
-            term, Posting(doc, a), index
-        )
+    def gain(s: Scorer, a: int, b: int) -> float:
+        return s.score(term, Posting(doc, b), index) - s.score(term, Posting(doc, a), index)
 
     g1, g20 = gain(bm25, 1, 2), gain(bm25, 19, 20)
     print(
@@ -147,9 +141,7 @@ def check_length_normalization(index: Index, bm25: BM25, tfidf: TfIdf) -> None:
             f"\n{'PASS' if ok else 'FAIL'}: BM25 prefers the short document; TF-IDF (no length normalization) ties them.\n"
         )
         return
-    print(
-        "_no term found that occurs once in two documents of clearly different length_\n"
-    )
+    print("_no term found that occurs once in two documents of clearly different length_\n")
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -9,6 +9,7 @@ from collections import defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 
+from findex.boolean import EngineName
 from findex.decorators import timed
 from findex.model import Index
 from findex.query import parse
@@ -25,7 +26,7 @@ def search(
     *,
     scorer: Scorer | None = None,
     k: int = 10,
-    engine: str = "merge",
+    engine: EngineName = "merge",
     matcher: Callable[[str], Sequence[int]] | None = None,
     snippets: bool = False,
     window: int = 80,
@@ -57,19 +58,15 @@ def search(
         scores = dict.fromkeys(ids, 0.0)
 
     meta = index.doc_meta
-    hits = (
-        SearchResult(score=s, doc_id=d, title=meta[d].title) for d, s in scores.items()
-    )
+    hits = (SearchResult(score=s, doc_id=d, title=meta[d].title) for d, s in scores.items())
     top = heapq.nlargest(k, hits)  # uses SearchResult's order=True
 
     if snippets:
-        out = []
+        out: list[SearchResult] = []
         for r in top:
             text = read_text(meta[r.doc_id].path)
             snip = make_snippet(text, terms, window=window, marks=marks) if text else ""
-            out.append(
-                replace(r, snippet=snip)
-            )  # frozen dataclass: build a modified copy
+            out.append(replace(r, snippet=snip))  # frozen dataclass: build a modified copy
         top = out
     return top
 
@@ -82,12 +79,12 @@ class SearchEngine:
         index: Index,
         scorer: Scorer | None = None,
         *,
-        engine: str = "merge",
+        engine: EngineName = "merge",
         cache_size: int = 256,
     ) -> None:
         self.index = index
         self.scorer = scorer or BM25()
-        self.engine = engine
+        self.engine: EngineName = engine
         # lru_cache needs hashable args (a str is) and returns the same tuple on a hit.
         # It is created per instance, not with @lru_cache on the method, so the cache
         # does not keep every engine (and its index) alive forever through ``self``.
@@ -103,6 +100,8 @@ class SearchEngine:
         *,
         scorer: Scorer | None = None,
         snippets: bool = True,
+        window: int = 80,
+        marks: Marks = ("**", "**"),
     ) -> list[SearchResult]:
         hits_before = self.match.cache_info().hits
         ids = self.match(query)
@@ -121,6 +120,8 @@ class SearchEngine:
             engine=self.engine,
             matcher=lambda _q: ids,
             snippets=snippets,
+            window=window,
+            marks=marks,
         )
 
     def cache_info(self):

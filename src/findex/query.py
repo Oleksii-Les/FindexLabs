@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from collections.abc import Collection
 
-from findex.boolean import ENGINES, merge_and
+from findex.boolean import ENGINES, EngineName, merge_and
 from findex.model import Index, PostingList
 from findex.tokenize import normalize, tokenize
 
@@ -28,8 +28,8 @@ class PositionsRequired(ValueError):
     """Phrase queries need token positions: rebuild with ``--positions``."""
 
 
-def _parts(node: Node, cls: type) -> tuple[Node, ...]:
-    return node.children if isinstance(node, cls) else (node,)  # type: ignore[attr-defined]
+def _parts(node: Node, cls: type[_NAry]) -> tuple[Node, ...]:
+    return node.children if isinstance(node, cls) else (node,)
 
 
 class Node:
@@ -42,10 +42,10 @@ class Node:
 
     __slots__ = ()
 
-    def _key(self) -> tuple:
+    def _key(self) -> tuple[object, ...]:
         raise NotImplementedError
 
-    def evaluate(self, index: Index, engine: str = "merge") -> list[int]:
+    def evaluate(self, index: Index, engine: EngineName = "merge") -> list[int]:
         raise NotImplementedError
 
     def terms(self) -> list[str]:
@@ -73,6 +73,14 @@ class Node:
     def __invert__(self) -> Node:
         return Not(self)
 
+    def __str__(self) -> str:
+        """Canonical query string; ``parse(str(node)) == node`` for trees built from
+        ``Term``, ``Phrase`` and the operators (a property tested with Hypothesis)."""
+        return self._render()
+
+    def _render(self, parent: type | None = None) -> str:
+        raise NotImplementedError
+
 
 class Term(Node):
     __slots__ = ("text",)
@@ -80,13 +88,16 @@ class Term(Node):
     def __init__(self, text: str) -> None:
         self.text = normalize(text)  # same normalization as at index time
 
-    def _key(self) -> tuple:
+    def _key(self) -> tuple[object, ...]:
         return (self.text,)
 
     def __repr__(self) -> str:
         return f"Term({self.text!r})"
 
-    def evaluate(self, index: Index, engine: str = "merge") -> list[int]:
+    def _render(self, parent: type | None = None) -> str:
+        return self.text
+
+    def evaluate(self, index: Index, engine: EngineName = "merge") -> list[int]:
         return list(index.doc_ids(self.text))
 
     def terms(self) -> list[str]:
@@ -99,16 +110,19 @@ class Phrase(Node):
     def __init__(self, *words: str) -> None:
         self.words = tuple(normalize(w) for w in words)
 
-    def _key(self) -> tuple:
+    def _key(self) -> tuple[object, ...]:
         return self.words
 
     def __repr__(self) -> str:
         return f"Phrase({', '.join(map(repr, self.words))})"
 
+    def _render(self, parent: type | None = None) -> str:
+        return '"' + " ".join(self.words) + '"'
+
     def terms(self) -> list[str]:
         return list(self.words)
 
-    def evaluate(self, index: Index, engine: str = "merge") -> list[int]:
+    def evaluate(self, index: Index, engine: EngineName = "merge") -> list[int]:
         words = self.words
         if not words:
             return []
@@ -116,7 +130,7 @@ class Phrase(Node):
             return Term(words[0]).evaluate(index, engine)
         if not index.has_positions:
             raise PositionsRequired(
-                "phrase queries need token positions: rebuild the index with --positions"
+                "phrase queries need token positions: rebuild the index with `findex index --positions`"
             )
         and_ = ENGINES[engine][0]
         candidates = list(index.doc_ids(words[0]))
@@ -139,9 +153,7 @@ class Phrase(Node):
         return hits
 
 
-def _positions(
-    index: Index, term: str, wanted: Collection[int]
-) -> dict[int, tuple[int, ...]]:
+def _positions(index: Index, term: str, wanted: Collection[int]) -> dict[int, tuple[int, ...]]:
     postings = index[term]
     if isinstance(postings, PostingList):
         return postings.positions_by_doc(wanted)
@@ -156,11 +168,16 @@ class _NAry(Node):
             raise ValueError(f"{type(self).__name__} needs at least one child")
         self.children = children
 
-    def _key(self) -> tuple:
+    def _key(self) -> tuple[object, ...]:
         return self.children
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}({', '.join(map(repr, self.children))})"
+
+    def _render(self, parent: type | None = None) -> str:
+        word = " AND " if isinstance(self, And) else " OR "
+        text = word.join(c._render(type(self)) for c in self.children)
+        return f"({text})" if parent is not None else text
 
     def terms(self) -> list[str]:
         return [t for c in self.children for t in c.terms()]
@@ -169,10 +186,10 @@ class _NAry(Node):
 class And(_NAry):
     __slots__ = ()
 
-    def evaluate(self, index: Index, engine: str = "merge") -> list[int]:
+    def evaluate(self, index: Index, engine: EngineName = "merge") -> list[int]:
         and_, _, andnot = ENGINES[engine]
         positives = [c for c in self.children if not isinstance(c, Not)]
-        negatives = [c.child for c in self.children if isinstance(c, Not)]  # type: ignore[attr-defined]
+        negatives = [c.child for c in self.children if isinstance(c, Not)]
         if positives:
             lists = sorted((c.evaluate(index, engine) for c in positives), key=len)
             result = lists[0]  # smallest list first: cheapest intersections
@@ -192,7 +209,7 @@ class And(_NAry):
 class Or(_NAry):
     __slots__ = ()
 
-    def evaluate(self, index: Index, engine: str = "merge") -> list[int]:
+    def evaluate(self, index: Index, engine: EngineName = "merge") -> list[int]:
         or_ = ENGINES[engine][1]
         result: list[int] = []
         for c in self.children:
@@ -206,16 +223,19 @@ class Not(Node):
     def __init__(self, child: Node) -> None:
         self.child = child
 
-    def _key(self) -> tuple:
+    def _key(self) -> tuple[object, ...]:
         return (self.child,)
 
     def __repr__(self) -> str:
         return f"Not({self.child!r})"
 
+    def _render(self, parent: type | None = None) -> str:
+        return f"NOT {self.child._render(Not)}"
+
     def __invert__(self) -> Node:  # ~~x is x
         return self.child
 
-    def evaluate(self, index: Index, engine: str = "merge") -> list[int]:
+    def evaluate(self, index: Index, engine: EngineName = "merge") -> list[int]:
         andnot = ENGINES[engine][2]
         return andnot(range(index.num_docs), self.child.evaluate(index, engine))
 
@@ -241,9 +261,7 @@ def _lex(query: str) -> list[tuple[str, str]]:
             out.append(("RP", ")"))
         elif word in ("AND", "OR", "NOT"):
             out.append((word, word))
-        elif any(
-            True for _ in tokenize(word)
-        ):  # pure punctuation such as "&" is dropped
+        elif any(True for _ in tokenize(word)):  # pure punctuation such as "&" is dropped
             out.append(("WORD", word))
     return out
 

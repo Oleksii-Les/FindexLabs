@@ -7,7 +7,7 @@ import json
 import logging
 from collections.abc import Iterator
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, cast
 
 log = logging.getLogger(__name__)
 
@@ -41,11 +41,11 @@ def _iter_jsonl(path: Path) -> Iterator[tuple[Path, str]]:
             if not line:
                 continue
             try:
-                obj = json.loads(line)
+                obj = cast(object, json.loads(line))
             except json.JSONDecodeError:
                 log.warning("%s:%d is not valid JSON; skipped", path, lineno)
                 continue
-            text = obj.get("text") if isinstance(obj, dict) else None
+            text = cast(dict[str, object], obj).get("text") if isinstance(obj, dict) else None
             if not isinstance(text, str):
                 log.warning("%s:%d has no string 'text' field; skipped", path, lineno)
                 continue
@@ -71,3 +71,12 @@ def iter_documents(root: Path) -> Iterator[Document]:
         raise FileNotFoundError(f"corpus not found or unsupported: {root}")
     for doc_id, (path, text) in enumerate(source):
         yield Document(doc_id, path, text)
+
+
+def count_documents(root: Path) -> int | None:
+    """Cheap document count for progress bars: number of ``*.txt`` files, or None if unknown
+    (a ``.jsonl`` file would have to be read to be counted)."""
+    root = Path(root)
+    if root.is_dir():
+        return sum(1 for p in root.rglob("*.txt") if p.is_file())
+    return None

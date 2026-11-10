@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter, defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 from findex.corpus import Document
@@ -16,6 +16,8 @@ from findex.model import (
     PlainPosting,
     Posting,
     PostingList,
+    PostingView,
+    StorageName,
 )
 from findex.tokenize import tokenize
 
@@ -36,21 +38,19 @@ def extract_title(text: str, path: Path) -> str:
 
 @timed
 def build_index(
-    docs: Iterable[Document], *, storage: str = "slots", positions: bool = False
+    docs: Iterable[Document], *, storage: StorageName = "slots", positions: bool = False
 ) -> Index:
     """Consume ``docs`` (a stream, ascending doc_id) and return the index.
 
     Memory while building = the index + the Counter of ONE document.
     Because doc_ids arrive ascending, every postings list is sorted for free.
     """
-    if storage not in STORAGES:
+    if storage not in STORAGES:  # the Literal type is not enforced at runtime
         raise ValueError(f"storage must be one of {STORAGES}, got {storage!r}")
 
-    if storage == "array":
-        postings: defaultdict = defaultdict(lambda: PostingList(positions))
-    else:
-        postings = defaultdict(list)  # term -> list; first access creates the list
-    make = Posting if storage == "slots" else PlainPosting
+    as_objects: defaultdict[str, list[PostingView]] = defaultdict(list)  # list/dataclass storages
+    as_arrays: defaultdict[str, PostingList] = defaultdict(lambda: PostingList(positions))
+    make: type[Posting] | type[PlainPosting] = Posting if storage == "slots" else PlainPosting
     doc_lengths: dict[int, int] = {}
     doc_meta: dict[int, DocMeta] = {}
     last_id = -1
@@ -60,33 +60,33 @@ def build_index(
         if doc_id <= last_id:
             raise ValueError("documents must arrive in strictly ascending doc_id order")
         last_id = doc_id
-        doc_meta[doc_id] = DocMeta(
-            doc_id, str(doc.path), extract_title(doc.text, doc.path)
-        )
+        doc_meta[doc_id] = DocMeta(doc_id, str(doc.path), extract_title(doc.text, doc.path))
 
+        items: Iterable[tuple[str, int, list[int] | None]]
         if positions:
             occ: defaultdict[str, list[int]] = defaultdict(list)
             for pos, tok in enumerate(tokenize(doc.text)):
                 occ[tok].append(pos)
-            items = ((t, len(p), p) for t, p in occ.items())
+            items = [(t, len(p), p) for t, p in occ.items()]
             doc_lengths[doc_id] = sum(len(p) for p in occ.values())
         else:
             counts = Counter(tokenize(doc.text))
-            items = ((t, c, None) for t, c in counts.items())
+            items = [(t, c, None) for t, c in counts.items()]
             doc_lengths[doc_id] = counts.total()
 
         if storage == "array":
             for term, tf, pos in items:
-                pl = postings[term]
+                pl = as_arrays[term]
                 pl.doc_ids.append(doc_id)
                 pl.tfs.append(tf)
-                if pos is not None:
+                if pos is not None and pl.positions is not None:
                     pl.positions.extend(pos)
         else:
             for term, tf, pos in items:
-                postings[term].append(
-                    make(doc_id, tf, tuple(pos) if pos is not None else ())
-                )
+                as_objects[term].append(make(doc_id, tf, tuple(pos) if pos is not None else ()))
 
     # plain dict: no auto-creation on lookup, and (unlike a lambda-defaultdict) picklable
-    return Index(storage, positions, dict(postings), doc_lengths, doc_meta)
+    postings: dict[str, Sequence[PostingView]] = dict(
+        as_arrays if storage == "array" else as_objects
+    )
+    return Index(storage, positions, postings, doc_lengths, doc_meta)

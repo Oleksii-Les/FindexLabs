@@ -16,10 +16,7 @@ def test_txt_tree_and_bad_encoding(tmp_path):
 def test_jsonl(tmp_path):
     p = tmp_path / "c.jsonl"
     p.write_text(
-        json.dumps({"text": "one two"})
-        + "\nnot json\n"
-        + json.dumps({"text": "three"})
-        + "\n",
+        json.dumps({"text": "one two"}) + "\nnot json\n" + json.dumps({"text": "three"}) + "\n",
         encoding="utf-8",
     )
     assert [d.text for d in iter_documents(p)] == ["one two", "three"]

@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
-from findex.model import Index, Posting
+from findex.model import Index, PostingView
 
 
 @runtime_checkable
 class Scorer(Protocol):
     """Anything with this method is a Scorer -- no inheritance needed (duck typing)."""
 
-    def score(self, term: str, posting: Posting, index: Index) -> float:
+    def score(self, term: str, posting: PostingView, index: Index) -> float:
         """Contribution of ``term`` to the document of ``posting``."""
         ...
 
@@ -28,7 +28,7 @@ class TfIdf:
         df = index.df(term)
         return math.log(index.num_docs / df) if df else 0.0
 
-    def score(self, term: str, posting: Posting, index: Index) -> float:
+    def score(self, term: str, posting: PostingView, index: Index) -> float:
         tf = posting.tf
         weight = (1.0 + math.log(tf)) if self.sublinear else float(tf)
         return weight * self.idf(term, index) if tf > 0 else 0.0
@@ -58,7 +58,7 @@ class BM25:
         df, n = index.df(term), index.num_docs
         return math.log(1.0 + (n - df + 0.5) / (df + 0.5))
 
-    def score(self, term: str, posting: Posting, index: Index) -> float:
+    def score(self, term: str, posting: PostingView, index: Index) -> float:
         tf = posting.tf
         if tf <= 0:
             return 0.0
@@ -84,3 +84,15 @@ class SearchResult:
 
     def __str__(self) -> str:
         return f"{self.score:8.3f}  [{self.doc_id}] {self.title}"
+
+
+ScorerName = Literal["bm25", "tfidf"]
+
+
+def make_scorer(name: ScorerName) -> Scorer:
+    """Scorer by name (used by the CLI). Both results satisfy ``Scorer`` structurally."""
+    if name == "bm25":
+        return BM25()
+    if name == "tfidf":
+        return TfIdf()
+    raise ValueError(f"unknown scorer {name!r}")

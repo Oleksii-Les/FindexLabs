@@ -29,9 +29,7 @@ def read_text(path: str | Path) -> str | None:
 
 @lru_cache(maxsize=256)
 def _pattern(terms: tuple[str, ...]) -> re.Pattern[str] | None:
-    alts = sorted(
-        {re.escape(t).replace("'", "['\u2019\u02bc]") for t in terms if t}, key=len
-    )
+    alts = sorted({re.escape(t).replace("'", "['\u2019\u02bc]") for t in terms if t}, key=len)
     if not alts:
         return None
     body = "|".join(reversed(alts))  # longest first
@@ -40,10 +38,7 @@ def _pattern(terms: tuple[str, ...]) -> re.Pattern[str] | None:
 
 
 def _matches(text: str, pat: re.Pattern[str], limit: int) -> list[tuple[int, int, str]]:
-    return [
-        (m.start(), m.end(), m.group().casefold())
-        for m in islice(pat.finditer(text), limit)
-    ]
+    return [(m.start(), m.end(), m.group().casefold()) for m in islice(pat.finditer(text), limit)]
 
 
 def make_snippet(

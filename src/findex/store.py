@@ -16,20 +16,27 @@ import pickle
 import struct
 import sys
 from array import array
-from collections.abc import Iterator
+from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from itertools import chain
 from pathlib import Path
+from typing import Any, BinaryIO, Literal, cast
 
 from findex.decorators import timed
-from findex.model import DocMeta, Index, PostingList
+from findex.model import DocMeta, Index, PostingList, PostingView
+
+
+class IndexFormatError(ValueError):
+    """The file is not a (complete, supported) findex index."""
+
 
 MAGIC = b"FINDEXBN"
 FORMATS = ("binary", "pickle")
+FormatName = Literal["binary", "pickle"]
 _ITEM = array("I").itemsize  # 4 on every mainstream platform
 
 
-def save(index: Index, path: str | Path, fmt: str = "binary") -> int:
+def save(index: Index, path: str | Path, fmt: FormatName = "binary") -> int:
     """Write ``index`` to ``path``; return the file size in bytes."""
     path = Path(path)
     if fmt == "pickle":
@@ -55,16 +62,48 @@ def load(path: str | Path) -> Index:
     with path.open("rb") as f:
         head = f.read(len(MAGIC))
         if head == MAGIC:
-            return _load_binary(f)
-    with path.open("rb") as f:
-        obj = pickle.load(f)
+            try:
+                return _load_binary(f)
+            except IndexFormatError:
+                raise
+            except (
+                json.JSONDecodeError,
+                UnicodeDecodeError,
+                struct.error,
+                KeyError,
+                TypeError,
+                ValueError,
+                OverflowError,
+            ) as exc:
+                raise IndexFormatError(f"{path} is damaged ({type(exc).__name__}: {exc})") from exc
+    try:
+        with path.open("rb") as f:
+            obj = cast(object, pickle.load(f))
+    except (
+        pickle.UnpicklingError,
+        EOFError,
+        ValueError,
+        AttributeError,
+        ImportError,
+        IndexError,
+        TypeError,
+        KeyError,
+    ) as exc:
+        # a damaged or foreign file: report it, do not leak the unpickler's internals
+        raise IndexFormatError(f"{path} is not a findex index file") from exc
     if not isinstance(obj, Index):
-        raise TypeError(f"{path} does not contain a findex Index")
+        raise IndexFormatError(f"{path} does not contain a findex Index")
     return obj
 
 
+def detect_format(path: str | Path) -> FormatName:
+    """Which of our formats a file is, judged by its first bytes (cheap, no unpickling)."""
+    with Path(path).open("rb") as f:
+        return "binary" if f.read(len(MAGIC)) == MAGIC else "pickle"
+
+
 @contextmanager
-def open_index(path: str | Path) -> Iterator[Index]:
+def open_index(path: str | Path) -> Generator[Index]:
     """``with open_index(p) as ix:`` -- load, use, and ALWAYS release the index.
 
     Everything before ``yield`` is ``__enter__``; everything after is ``__exit__``.
@@ -78,17 +117,13 @@ def open_index(path: str | Path) -> Iterator[Index]:
 
 
 # ---------------------------------------------------------------------------------
-def _arrays_of(index: Index, term: str) -> tuple[array, array, array | None]:
+def _arrays_of(index: Index, term: str) -> tuple[array[int], array[int], array[int] | None]:
     p = index.postings[term]
     if isinstance(p, PostingList):
         return p.doc_ids, p.tfs, p.positions
     ids = array("I", (x.doc_id for x in p))
     tfs = array("I", (x.tf for x in p))
-    pos = (
-        array("I", chain.from_iterable(x.positions for x in p))
-        if index.has_positions
-        else None
-    )
+    pos = array("I", chain.from_iterable(x.positions for x in p)) if index.has_positions else None
     return ids, tfs, pos
 
 
@@ -115,31 +150,31 @@ def _save_binary(index: Index, path: Path) -> None:
             ids, tfs, pos = _arrays_of(index, term)
             f.write(ids.tobytes())
             f.write(tfs.tobytes())
-            if index.has_positions:
+            if pos is not None:
                 f.write(pos.tobytes())
 
 
-def _take(buf: memoryview, offset: int, n: int, swap: bool) -> tuple[array, int]:
+def _take(buf: memoryview, offset: int, n: int, swap: bool) -> tuple[array[int], int]:
     a = array("I")
     end = offset + n * _ITEM
     if end > len(buf):
-        raise ValueError("truncated or corrupt index file")
+        raise IndexFormatError("truncated or corrupt index file")
     a.frombytes(buf[offset:end])
     if swap:
         a.byteswap()
     return a, end
 
 
-def _load_binary(f) -> Index:
+def _load_binary(f: BinaryIO) -> Index:
     (hlen,) = struct.unpack("<Q", f.read(8))
-    header = json.loads(f.read(hlen).decode("utf-8"))
+    header = cast(dict[str, Any], json.loads(f.read(hlen).decode("utf-8")))
     if header.get("version") != 1:
-        raise ValueError("unsupported index version")
+        raise IndexFormatError("unsupported index version")
     blob = memoryview(f.read())
     swap = header["byteorder"] != sys.byteorder
     has_pos = header["has_positions"]
 
-    postings: dict[str, PostingList] = {}
+    postings: dict[str, Sequence[PostingView]] = {}
     off = 0
     for term, n in zip(header["terms"], header["counts"], strict=True):
         pl = PostingList(has_pos)
@@ -149,7 +184,7 @@ def _load_binary(f) -> Index:
             pl.positions, off = _take(blob, off, sum(pl.tfs), swap)
         postings[term] = pl
     if off != len(blob):
-        raise ValueError("trailing bytes in index file")
+        raise IndexFormatError("trailing bytes in index file")
 
     ids = header["doc_ids"]
     meta = {

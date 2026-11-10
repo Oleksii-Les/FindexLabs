@@ -12,11 +12,7 @@ from findex.scoring import BM25, TfIdf
 
 def test_is_relevant_matches_name_stem_or_title():
     m = DocMeta(0, "data/g/2701.txt", "Moby Dick; Or, The Whale")
-    assert (
-        is_relevant(m, ["2701.txt"])
-        and is_relevant(m, ["2701"])
-        and is_relevant(m, ["whale"])
-    )
+    assert is_relevant(m, ["2701.txt"]) and is_relevant(m, ["2701"]) and is_relevant(m, ["whale"])
     assert not is_relevant(m, ["27"]) and not is_relevant(m, [])
 
 

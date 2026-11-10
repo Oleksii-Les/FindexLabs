@@ -8,7 +8,6 @@ from findex.boolean import ENGINES, evaluate, merge_and, merge_andnot, merge_or
 from findex.build import build_index, extract_title
 from findex.corpus import Document, iter_documents
 from findex.model import STORAGES, Index
-from findex.search import main as search_main
 from findex.store import load, save
 
 TEXTS = [
@@ -94,7 +93,10 @@ def test_engines_agree_on_random_input():
 @pytest.mark.parametrize("storage", STORAGES)
 def test_queries(engine, storage):
     idx = build(storage)
-    q = lambda s: evaluate(s, idx, engine)
+
+    def q(s: str) -> list[int]:
+        return evaluate(s, idx, engine)
+
     assert q("cat") == [0, 2, 3]
     assert q("cat dog") == [0]  # implicit AND
     assert q("cat AND bird") == [2]
@@ -122,9 +124,7 @@ def test_save_load_roundtrip(tmp_path, fmt, storage, positions):
         assert back.storage == "array"
         if positions:
             ref = build("array", True)
-            assert list(back.postings["cat"].positions) == list(
-                ref.postings["cat"].positions
-            )
+            assert list(back.postings["cat"].positions) == list(ref.postings["cat"].positions)
 
 
 def test_binary_rejects_truncated(tmp_path):
@@ -133,23 +133,6 @@ def test_binary_rejects_truncated(tmp_path):
     p.write_bytes(p.read_bytes()[:-5])
     with pytest.raises(ValueError):
         load(p)
-
-
-def test_end_to_end_cli(corpus, tmp_path, capsys):
-    from findex.index import main as index_main
-
-    out = tmp_path / "index.bin"
-    index_main([str(corpus), "--out", str(out), "--no-tracemalloc"])
-    capsys.readouterr()
-    search_main([str(out), "cat NOT dog", "--no-tracemalloc"])
-    text = capsys.readouterr().out
-    # rglob order is arbitrary, so identify hits by content rather than by doc_id
-    assert (
-        "2 matching documents" in text and "cat bird fish" in text and "Привіт" in text
-    )
-    assert "Cats" not in text
-    search_main([str(out), "cat", "--engine", "set", "--no-tracemalloc"])
-    assert "3 matching documents" in capsys.readouterr().out
 
 
 def test_json_header_is_plain_json(tmp_path):

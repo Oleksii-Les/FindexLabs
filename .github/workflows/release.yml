@@ -1,0 +1,31 @@
+name: Release
+
+# Pushing a tag like v0.4.0 builds the wheel, proves it installs in a clean environment,
+# and attaches it to a GitHub Release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Build wheel and sdist
+        run: uv build
+
+      - name: Smoke-test the wheel in an isolated tool environment
+        run: |
+          uv tool install dist/*.whl
+          findex --help
+          findex --version
+
+      - name: Create the release and upload the artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "findex $GITHUB_REF_NAME" --generate-notes

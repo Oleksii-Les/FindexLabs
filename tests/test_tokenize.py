@@ -1,74 +1,60 @@
 import inspect
 import unicodedata
 
+import pytest
+
 from findex.corpus import iter_documents
-from findex.tokenize import tokenize
+from findex.tokenize import normalize, tokenize
 
 
 def toks(s: str) -> list[str]:
     return list(tokenize(s))
 
 
-def test_is_generator():
+def test_pipeline_pieces_are_generators():
     assert inspect.isgeneratorfunction(tokenize)
     assert inspect.isgeneratorfunction(iter_documents)
 
 
-def test_empty_and_punctuation_only():
-    assert toks("") == []
-    assert toks("  ...!?  —  ") == []
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("", []),
+        ("  ...!?  —  ", []),
+        ("Hello WORLD hElLo", ["hello", "world", "hello"]),
+        # apostrophes: inside a word they stay, typographic ones are normalized, edges go away
+        ("Don't don’t 'quoted' ʼthisʼ", ["don't", "don't", "quoted", "this"]),
+        # hyphens: inside a word they stay; a spaced dash is punctuation
+        ("well-known - state-of-the-art — end", ["well-known", "state-of-the-art", "end"]),
+        # digits are ordinary token characters; decimals are NOT special; "_" separates
+        ("mp3 2026 3.14 snake_case", ["mp3", "2026", "3", "14", "snake", "case"]),
+        # Unicode: Cyrillic, German sharp s, accents, CJK, Greek final sigma
+        ("Привіт, Світе! Їжак та ЄВРОПА.", ["привіт", "світе", "їжак", "та", "європа"]),
+        ("п'ять і п’ять", ["п'ять", "і", "п'ять"]),
+        ("Straße STRASSE", ["strasse", "strasse"]),
+        ("ΟΔΟΣ", ["οδοσ"]),
+        ("naïve café", ["naïve", "café"]),
+        ("日本語のテキスト", ["日本語のテキスト"]),
+        ("emoji 🙂 and ½", ["emoji", "and", "½"]),
+    ],
+)
+def test_tokenize_table(text: str, expected: list[str]):
+    assert toks(text) == expected
 
 
-def test_mixed_case():
-    assert toks("Hello WORLD hElLo") == ["hello", "world", "hello"]
+@pytest.mark.parametrize("composed", ["café", "ångström", "Ёлка", "ǆ"])
+def test_unicode_equivalent_forms_give_same_tokens(composed: str):
+    decomposed = unicodedata.normalize("NFD", composed)
+    assert toks(composed) == toks(decomposed)
 
 
-def test_casefold_vs_lower():
-    assert toks("Straße") == toks("STRASSE") == ["strasse"]
+def test_normalize_is_nfc_casefolded():
+    assert normalize("CAFE\u0301") == "caf\u00e9"
+    assert unicodedata.is_normalized("NFC", normalize("ǅ Ⅷ ﬃ"))
 
 
-def test_cyrillic():
-    assert toks("Привіт, Світе! Їжак та ЄВРОПА.") == [
-        "привіт",
-        "світе",
-        "їжак",
-        "та",
-        "європа",
-    ]
-
-
-def test_combining_mark_is_normalized():
-    composed = "caf\u00e9"
-    decomposed = "cafe\u0301"
-    assert composed != decomposed
-    assert toks(composed) == toks(decomposed) == [unicodedata.normalize("NFC", "café")]
-
-
-def test_apostrophes():
-    assert toks("Don't don’t 'quoted' п'ять") == ["don't", "don't", "quoted", "п'ять"]
-
-
-def test_hyphens():
-    assert toks("well-known - state-of-the-art — end") == [
-        "well-known",
-        "state-of-the-art",
-        "end",
-    ]
-
-
-def test_digits_and_underscore():
-    assert toks("mp3 2026 3.14 snake_case") == [
-        "mp3",
-        "2026",
-        "3",
-        "14",
-        "snake",
-        "case",
-    ]
-
-
-def test_lazy_returns_before_consuming():
+def test_tokenizer_is_lazy_and_single_pass():
     it = tokenize("a b c")
     assert next(it) == "a"
     assert list(it) == ["b", "c"]
-    assert list(it) == []  # exhausted: single-pass
+    assert list(it) == []

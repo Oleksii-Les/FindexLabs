@@ -31,12 +31,9 @@ def test_logs_elapsed_time(caplog):
     def work():
         return 1
 
-    with caplog.at_level(logging.INFO, logger="findex.timing"):
+    with caplog.at_level(logging.DEBUG, logger="findex.timing"):
         work()
-    assert any(
-        "work took" in r.getMessage() and " ms" in r.getMessage()
-        for r in caplog.records
-    )
+    assert any("work took" in r.getMessage() and " ms" in r.getMessage() for r in caplog.records)
 
 
 def test_logs_even_when_function_raises(caplog):
@@ -44,19 +41,22 @@ def test_logs_even_when_function_raises(caplog):
     def bad():
         raise KeyError("x")
 
-    with caplog.at_level(logging.INFO, logger="findex.timing"), pytest.raises(KeyError):
+    with caplog.at_level(logging.DEBUG, logger="findex.timing"), pytest.raises(KeyError):
         bad()
     assert any("bad took" in r.getMessage() for r in caplog.records)
 
 
 def test_decorator_with_arguments(caplog):
-    @timed(level=logging.DEBUG)
+    @timed(level=logging.INFO)
+    def loud():
+        return "ok"
+
+    @timed
     def quiet():
         return "ok"
 
     with caplog.at_level(logging.INFO, logger="findex.timing"):
         assert quiet() == "ok"
-    assert not caplog.records  # DEBUG record filtered out at INFO
-    with caplog.at_level(logging.DEBUG, logger="findex.timing"):
-        quiet()
-    assert caplog.records
+        assert not caplog.records  # the default level is DEBUG: filtered out at INFO
+        assert loud() == "ok"
+    assert [r.levelno for r in caplog.records] == [logging.INFO]

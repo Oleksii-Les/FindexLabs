@@ -10,11 +10,13 @@ Query language (left to right, NO precedence -- Lab 3 adds a real parser):
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from typing import Literal
 
 from findex.model import Index
 from findex.tokenize import tokenize
 
 Ids = Sequence[int]
+EngineName = Literal["merge", "set"]
 
 
 # ---- engine 1: two-pointer merge, O(len(a) + len(b)), no hashing --------------------
@@ -87,13 +89,13 @@ def set_andnot(a: Ids, b: Ids) -> list[int]:
 
 
 Op = Callable[[Ids, Ids], list[int]]
-ENGINES: dict[str, tuple[Op, Op, Op]] = {
+ENGINES: dict[EngineName, tuple[Op, Op, Op]] = {
     "merge": (merge_and, merge_or, merge_andnot),
     "set": (set_and, set_or, set_andnot),
 }
 
 
-def evaluate(query: str, index: Index, engine: str = "merge") -> list[int]:
+def evaluate(query: str, index: Index, engine: EngineName = "merge") -> list[int]:
     """Return the sorted doc_ids matching ``query``."""
     and_, or_, andnot = ENGINES[engine]
     everything = range(index.num_docs)
@@ -122,11 +124,7 @@ def evaluate(query: str, index: Index, engine: str = "merge") -> list[int]:
         if result is None:
             result = andnot(everything, ids) if negate else list(ids)
         elif negate:
-            result = (
-                andnot(result, ids)
-                if op == "AND"
-                else or_(result, andnot(everything, ids))
-            )
+            result = andnot(result, ids) if op == "AND" else or_(result, andnot(everything, ids))
         else:
             result = and_(result, ids) if op == "AND" else or_(result, ids)
         op, negate = "AND", False

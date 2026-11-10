@@ -8,12 +8,29 @@ would store them as ``__main__.Posting`` -- unloadable from any other program.
 from __future__ import annotations
 
 from array import array
+from collections import Counter
 from collections.abc import Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Any, overload
+from typing import Literal, Protocol, overload
 
 STORAGES = ("dataclass", "slots", "array")
+
+StorageName = Literal["dataclass", "slots", "array"]
+
+
+class PostingView(Protocol):
+    """Anything that looks like a posting (read-only view): ``Posting``, ``PlainPosting``.
+
+    A Protocol, so the two dataclasses satisfy it structurally -- no common base class.
+    """
+
+    @property
+    def doc_id(self) -> int: ...
+    @property
+    def tf(self) -> int: ...
+    @property
+    def positions(self) -> tuple[int, ...]: ...
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -53,9 +70,9 @@ class PostingList(Sequence[Posting]):
     __slots__ = ("doc_ids", "positions", "tfs")
 
     def __init__(self, with_positions: bool = False) -> None:
-        self.doc_ids = array("I")
-        self.tfs = array("I")
-        self.positions: array | None = array("I") if with_positions else None
+        self.doc_ids: array[int] = array("I")
+        self.tfs: array[int] = array("I")
+        self.positions: array[int] | None = array("I") if with_positions else None
 
     def __len__(self) -> int:
         return len(self.doc_ids)
@@ -75,7 +92,7 @@ class PostingList(Sequence[Posting]):
     def __getitem__(self, i: int) -> Posting: ...
     @overload
     def __getitem__(self, i: slice) -> list[Posting]: ...
-    def __getitem__(self, i):
+    def __getitem__(self, i: int | slice) -> Posting | list[Posting]:
         n = len(self)
         if isinstance(i, slice):
             return [self[j] for j in range(*i.indices(n))]
@@ -110,10 +127,12 @@ class PostingList(Sequence[Posting]):
             other.positions,
         )
 
-    __hash__ = None  # type: ignore[assignment]  # mutable container
+    # Deliberately unhashable (it wraps mutable arrays). Pyright rejects assigning None to
+    # the inherited ``__hash__`` method, hence the ignore -- this is the documented idiom.
+    __hash__ = None  # type: ignore[assignment]
 
 
-class Index(Mapping[str, Sequence[Posting]]):
+class Index(Mapping[str, Sequence[PostingView]]):
     """The inverted index as a read-only mapping ``term -> postings``.
 
     Python protocols implemented here (each is just a dunder method):
@@ -124,15 +143,15 @@ class Index(Mapping[str, Sequence[Posting]]):
 
     def __init__(
         self,
-        storage: str,
+        storage: StorageName,
         has_positions: bool,
-        postings: dict[str, Any],
+        postings: dict[str, Sequence[PostingView]],
         doc_lengths: dict[int, int],
         doc_meta: dict[int, DocMeta],
     ) -> None:
-        self.storage = storage  # "dataclass" | "slots" | "array"
+        self.storage: StorageName = storage
         self.has_positions = has_positions
-        self.postings = postings  # term -> list[Posting|PlainPosting] | PostingList
+        self.postings: dict[str, Sequence[PostingView]] = postings  # list[...] or PostingList
         self.doc_lengths = doc_lengths  # tokens per document
         self.doc_meta = doc_meta  # for displaying results
         self._closed = False
@@ -159,13 +178,11 @@ class Index(Mapping[str, Sequence[Posting]]):
         self._ensure_open()
         return len(self.postings)
 
-    def __contains__(
-        self, term: object
-    ) -> bool:  # O(1); Mapping's default would try __getitem__
+    def __contains__(self, term: object) -> bool:  # O(1); Mapping's default would try __getitem__
         self._ensure_open()
         return term in self.postings
 
-    def __getitem__(self, term: str) -> Sequence[Posting]:
+    def __getitem__(self, term: str) -> Sequence[PostingView]:
         self._ensure_open()
         return self.postings[term]  # KeyError for unknown terms, like a dict
 
@@ -198,6 +215,15 @@ class Index(Mapping[str, Sequence[Posting]]):
         """Document frequency: in how many documents does ``term`` occur (0 if unknown)."""
         p = self.postings.get(term)
         return 0 if p is None else len(p)
+
+    def term_frequencies(self) -> Counter[str]:
+        """Collection frequency: total occurrences of every term in the corpus."""
+        totals: Counter[str] = Counter()
+        for term, plist in self.postings.items():
+            totals[term] = (
+                sum(plist.tfs) if isinstance(plist, PostingList) else sum(p.tf for p in plist)
+            )
+        return totals
 
     def n_postings(self) -> int:
         return sum(len(p) for p in self.postings.values())

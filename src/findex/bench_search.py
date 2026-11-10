@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import timeit
+from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 
@@ -15,9 +16,12 @@ from findex.boolean import ENGINES
 from findex.store import load
 
 
-def best_time(fn, repeat: int = 5) -> float:
-    """Best-of-``repeat`` seconds per call (timeit picks the loop count)."""
+def best_time(fn: Callable[[], object], repeat: int = 5, quick: bool = False) -> float:
+    """Best-of-``repeat`` seconds per call. ``timeit`` picks the loop count so each
+    measurement lasts >= 0.2 s; ``quick`` uses a fixed small loop (for tests only)."""
     t = timeit.Timer(fn)
+    if quick:
+        return min(t.repeat(repeat=2, number=3)) / 3
     number, _ = t.autorange()
     return min(t.repeat(repeat=repeat, number=number)) / number
 
@@ -25,6 +29,7 @@ def best_time(fn, repeat: int = 5) -> float:
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="python -m findex.bench_search")
     ap.add_argument("index", type=Path)
+    ap.add_argument("--quick", action="store_true", help="few loops: fast but noisy (tests)")
     args = ap.parse_args(argv)
     index = load(args.index)
 
@@ -53,8 +58,8 @@ def main(argv: list[str] | None = None) -> None:
         a, b = ids[ta], ids[tb]
         f_merge, f_set = ENGINES["merge"][slot[op]], ENGINES["set"][slot[op]]
         assert f_merge(a, b) == f_set(a, b), "engines disagree!"
-        tm = best_time(partial(f_merge, a, b))
-        ts = best_time(partial(f_set, a, b))
+        tm = best_time(partial(f_merge, a, b), quick=args.quick)
+        ts = best_time(partial(f_set, a, b), quick=args.quick)
         win = f"set x{tm / ts:.1f}" if ts < tm else f"merge x{ts / tm:.1f}"
         print(
             f"| {op} | {label} | {len(a):,} | {len(b):,} | {tm * 1e6:,.1f} µs | {ts * 1e6:,.1f} µs | {win} |"

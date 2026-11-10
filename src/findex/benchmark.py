@@ -9,18 +9,19 @@ from __future__ import annotations
 
 import argparse
 import gc
-import logging
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from findex.eager import compute_stats_eager
+from findex.logging_setup import configure_logging
 from findex.stats import compute_stats, fmt_bytes, measure
 
 
-def timed(fn, *args):
+def timed[**P, T](fn: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> tuple[T, float]:
     gc.collect()
     t0 = time.perf_counter()
-    result = fn(*args)
+    result = fn(*args, **kwargs)
     return result, time.perf_counter() - t0
 
 
@@ -29,9 +30,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("root", type=Path)
     ap.add_argument("--limit", type=int, default=None)
     args = ap.parse_args(argv)
-    logging.basicConfig(level=logging.ERROR)
+    configure_logging(0)
 
-    rows = []
+    rows: list[tuple[str, int, int, int, float]] = []
     reference = None
     for name, fn in (
         ("eager (lists)", compute_stats_eager),

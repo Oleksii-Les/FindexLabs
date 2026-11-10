@@ -35,10 +35,7 @@ def test_not_and_parentheses():
 def test_the_labs_example_query():
     tree = parse('python AND (async OR await) NOT java "event loop"')
     expected = (
-        Term("python")
-        & (Term("async") | Term("await"))
-        & ~Term("java")
-        & Phrase("event", "loop")
+        Term("python") & (Term("async") | Term("await")) & ~Term("java") & Phrase("event", "loop")
     )
     assert tree == expected
     assert tree == And(
@@ -61,9 +58,7 @@ def test_normalization_and_single_word_phrase():
     assert parse("well-known") == Term("well-known")
     assert parse("x.y") == And(Term("x"), Term("y"))
     assert parse("a & b") == And(a, b)  # bare punctuation is ignored
-    assert parse("a and b") == And(
-        Term("a"), Term("and"), Term("b")
-    )  # keywords are UPPER-case
+    assert parse("a and b") == And(Term("a"), Term("and"), Term("b"))  # keywords are UPPER-case
 
 
 def test_equality_and_hash_contract():

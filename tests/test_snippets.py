@@ -45,9 +45,7 @@ def test_no_match_returns_beginning():
 
 
 def test_snippets_end_to_end(tmp_path):
-    (tmp_path / "a.txt").write_text(
-        "Title: Foxes\nThe quick brown fox jumps.\n" + "pad " * 200
-    )
+    (tmp_path / "a.txt").write_text("Title: Foxes\nThe quick brown fox jumps.\n" + "pad " * 200)
     (tmp_path / "b.txt").write_text("nothing here " * 5)
     ix = build_index(iter_documents(tmp_path), positions=False)
     (hit,) = search(ix, "fox", snippets=True)
