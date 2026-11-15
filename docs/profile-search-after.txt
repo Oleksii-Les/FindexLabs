@@ -1,0 +1,39 @@
+load: 0.70 s; query 'function OR value OR error': 5.57 ms per query (10 hits, 300 runs)
+
+--- top 9 by tottime ---
+         6207301 function calls (6205501 primitive calls) in 1.653 seconds
+
+   Ordered by: internal time
+   List reduced from 117 to 9 due to restriction <9>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+      900    0.846    0.001    1.278    0.001 boolean.py:40(merge_or)
+  5927100    0.431    0.000    0.431    0.000 {method 'append' of 'list' objects}
+      300    0.095    0.000    0.173    0.001 vector.py:126(rank)
+      300    0.038    0.000    0.038    0.000 {built-in method numpy.fromiter}
+      900    0.029    0.000    0.031    0.000 query.py:100(evaluate)
+      300    0.025    0.000    1.334    0.004 query.py:212(evaluate)
+      300    0.009    0.000    0.283    0.001 engine.py:23(search)
+     3000    0.009    0.000    0.015    0.000 dataclasses.py:1533(replace)
+      300    0.008    0.000    0.023    0.000 vector.py:38(top_k)
+
+
+
+--- top 9 by cumulative ---
+         6207301 function calls (6205501 primitive calls) in 1.653 seconds
+
+   Ordered by: cumulative time
+   List reduced from 117 to 9 due to restriction <9>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+      300    0.003    0.000    1.653    0.006 engine.py:108(search)
+      300    0.006    0.000    1.362    0.005 engine.py:105(_match)
+      300    0.025    0.000    1.334    0.004 query.py:212(evaluate)
+      900    0.846    0.001    1.278    0.001 boolean.py:40(merge_or)
+  5927100    0.431    0.000    0.431    0.000 {method 'append' of 'list' objects}
+      300    0.002    0.000    0.286    0.001 decorators.py:38(wrapper)
+      300    0.009    0.000    0.283    0.001 engine.py:23(search)
+      300    0.095    0.000    0.173    0.001 vector.py:126(rank)
+     3000    0.005    0.000    0.061    0.000 snippets.py:22(read_text)
+
+

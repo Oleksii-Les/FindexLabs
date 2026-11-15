@@ -20,7 +20,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies (exactly as locked)
-        run: uv sync --locked --python ${{ matrix.python-version }}
+        run: uv sync --locked --extra semantic --python ${{ matrix.python-version }}
 
       - name: Lint
         run: uv run ruff check .
@@ -33,3 +33,42 @@ jobs:
 
       - name: Tests with coverage (includes the slow ones)
         run: uv run pytest --cov=findex --cov-report=term-missing
+
+  bench:
+    # Lab 08: timing of build_index and search (pure-Python loop vs NumPy). Shared runners are noisy, so the
+    # numbers are for looking at (job summary + artifact); the hard guard is the NumPy/loop RATIO test.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install dependencies (exactly as locked)
+        run: uv sync --locked --python 3.13
+
+      - name: Restore the previous benchmark run (for the comparison column)
+        uses: actions/cache@v4
+        with:
+          path: .benchmarks
+          key: bench-${{ runner.os }}-${{ github.sha }}
+          restore-keys: bench-${{ runner.os }}-
+
+      - name: Benchmarks
+        run: |
+          uv run pytest tests/bench --benchmark-enable --benchmark-only \
+            --benchmark-autosave --benchmark-compare --benchmark-json=bench.json \
+            --benchmark-columns=min,median,mean,stddev,rounds | tee bench.txt
+          { echo '### Benchmarks'; echo '```'; cat bench.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: The ratio guard (NumPy must stay several times faster than the loop)
+        run: uv run pytest tests/bench -k numpy_stays
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmarks
+          path: |
+            bench.json
+            bench.txt

@@ -22,7 +22,7 @@ from contextlib import contextmanager
 from importlib.metadata import PackageNotFoundError, version
 from itertools import islice
 from pathlib import Path
-from typing import Annotated, NoReturn, TypedDict
+from typing import Annotated, NoReturn, TypedDict, cast
 
 import typer
 from rich.console import Console
@@ -48,8 +48,18 @@ from findex.logging_setup import configure_logging
 from findex.model import Index, StorageName
 from findex.parallel import BuildTimings, ExecutorName, build_parallel
 from findex.parbench import peak_rss_bytes
-from findex.query import PositionsRequired, QuerySyntaxError
-from findex.scoring import ScorerName, make_scorer
+from findex.query import PositionsRequired, QuerySyntaxError, parse
+from findex.scoring import ScorerName, SearchResult, make_scorer
+from findex.semantic import (
+    MODES,
+    Mode,
+    SemanticIndex,
+    SemanticUnavailable,
+    build_embeddings,
+    fragment_snippet,
+    make_reader,
+    search_mode,
+)
 from findex.stats import fmt_bytes
 from findex.store import FormatName, IndexFormatError, detect_format, open_index, save
 
@@ -91,7 +101,7 @@ def expected_errors() -> Generator[None]:
     """Turn the errors a user can cause into a one-line message (see module docstring)."""
     try:
         yield
-    except (QuerySyntaxError, PositionsRequired, IndexFormatError) as exc:
+    except (QuerySyntaxError, PositionsRequired, IndexFormatError, SemanticUnavailable) as exc:
         fail(str(exc))
     except OSError as exc:  # missing/unreadable files, permission problems, full disk
         fail((exc.strerror and f"{exc.strerror}: {exc.filename}") or str(exc))
@@ -459,9 +469,21 @@ def search_cmd(
     repeat: Annotated[
         int, typer.Option(min=1, help="Run the query N times (shows the cache hit with -v).")
     ] = 1,
+    mode: Annotated[
+        str, typer.Option("--mode", help=f"{' | '.join(MODES)}  (the last two need --embeddings).")
+    ] = "lexical",
+    embeddings: Annotated[
+        Path | None, typer.Option("--embeddings", help="Prefix made by `findex embed`.")
+    ] = None,
+    corpus_root: Annotated[
+        Path | None,
+        typer.Option(help="Where the .txt files are, if the paths in the index are stale."),
+    ] = None,
     verbose: VerboseOpt = 0,
 ) -> None:
     """Search INDEX for QUERY and print the best K documents."""
+    if mode not in MODES:
+        raise typer.BadParameter(f"choose one of: {', '.join(MODES)}", param_hint="--mode")
     apply_verbosity(ctx, verbose)
     require_file(index_path)
     with expected_errors():
@@ -472,8 +494,23 @@ def search_cmd(
             marks = ("**", "**") if json_out else (_HI_ON, _HI_OFF)
             for _ in range(repeat - 1):  # warm-up runs: the 2nd one is served from the cache
                 eng.search(query, k, snippets=False)
-            hits = eng.search(query, k, snippets=snippets, window=window, marks=marks)
-            matched = len(eng.match(query))
+            if mode == "lexical":
+                hits = eng.search(query, k, snippets=snippets, window=window, marks=marks)
+                matched = len(eng.match(query))
+            else:
+                hits = _search_semantic(
+                    index,
+                    eng,
+                    query,
+                    cast(Mode, mode),
+                    k,
+                    embeddings,
+                    corpus_root,
+                    snippets,
+                    window,
+                    marks,
+                )
+                matched = len(hits)
             if json_out:
                 for rank, r in enumerate(hits, start=1):
                     row = {
@@ -505,6 +542,73 @@ def search_cmd(
                 document = Text.assemble((r.title, "bold"), "\n", (name, "dim"))
                 table.add_row(str(rank), f"{r.score:.3f}", document, _highlighted(r.snippet))
             Console().print(table)
+
+
+def _search_semantic(
+    index: Index,
+    eng: SearchEngine,
+    query: str,
+    mode: Mode,
+    k: int,
+    embeddings: Path | None,
+    corpus_root: Path | None,
+    snippets: bool,
+    window: int,
+    marks: tuple[str, str],
+) -> list[SearchResult]:
+    if embeddings is None:
+        raise SemanticUnavailable("--mode semantic and --mode hybrid need --embeddings PREFIX")
+    sem = SemanticIndex.load(embeddings, index)
+    read = make_reader(index, corpus_root)
+    terms = list(dict.fromkeys(parse(query).terms()))
+    out: list[SearchResult] = []
+    for h in search_mode(eng, sem, query, mode, k):
+        snippet = ""
+        text = read(h.doc_id) if snippets else None
+        if text:
+            snippet = fragment_snippet(text, h.start, h.end, terms, window=window, marks=marks)
+        out.append(SearchResult(h.score, h.doc_id, index.doc_meta[h.doc_id].title, snippet))
+    return out
+
+
+@app.command("embed")
+def embed_cmd(
+    ctx: typer.Context,
+    index_path: IndexArg,
+    out: Annotated[
+        Path, typer.Option("--out", "-o", help="Output prefix: <out>.npy, <out>.json ...")
+    ] = Path("embeddings"),
+    model: Annotated[
+        str,
+        typer.Option(help="lsa (offline, NumPy at query time) | minilm (neural, needs the extra)."),
+    ] = "lsa",
+    dim: Annotated[int, typer.Option(min=2, help="lsa: number of dimensions.")] = 256,
+    chunk_chars: Annotated[int, typer.Option(min=50, help="Fragment size in characters.")] = 800,
+    corpus_root: Annotated[
+        Path | None,
+        typer.Option(help="Where the .txt files are, if the paths in the index are stale."),
+    ] = None,
+    verbose: VerboseOpt = 0,
+) -> None:
+    """Cut the documents of INDEX into fragments, embed them and save the matrix (.npy)."""
+    apply_verbosity(ctx, verbose)
+    require_file(index_path)
+    with expected_errors(), open_index(index_path) as index:
+        t0 = time.perf_counter()
+        meta = build_embeddings(
+            index,
+            out,
+            make_reader(index, corpus_root),
+            model=model,
+            dim=dim,
+            chunk_chars=chunk_chars,
+        )
+        table = Table(show_header=False, box=None)
+        for key in ("model", "dim", "documents", "chunks", "chunk_chars"):
+            table.add_row(key, str(meta[key]))
+        table.add_row("time", f"{time.perf_counter() - t0:.1f} s")
+        table.add_row("files", f"{out}.npy  {out}.chunks.npy  {out}.json")
+        Console().print(table)
 
 
 # --------------------------------------------------------------------------- stats

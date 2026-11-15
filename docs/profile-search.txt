@@ -1,0 +1,45 @@
+load: 0.70 s; query 'function OR value OR error': 83.80 ms per query (10 hits, 100 runs)
+
+--- top 12 by tottime ---
+         23725101 function calls (22181201 primitive calls) in 7.691 seconds
+
+   Ordered by: internal time
+   List reduced from 103 to 12 due to restriction <12>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+  1543900    0.975    0.000    4.031    0.000 scoring.py:61(score)
+  1544200    0.937    0.000    1.620    0.000 model.py:80(__iter__)
+  1543900    0.874    0.000    2.824    0.000 scoring.py:57(idf)
+      100    0.827    0.008    7.901    0.079 engine.py:22(search)
+4638100/3094200    0.591    0.000    0.844    0.000 {built-in method builtins.len}
+  1026700    0.537    0.000    0.537    0.000 <string>:2(__init__)
+  1025800    0.482    0.000    1.018    0.000 engine.py:61(<genexpr>)
+  1543900    0.481    0.000    1.394    0.000 model.py:214(df)
+  1543900    0.275    0.000    0.399    0.000 model.py:202(num_docs)
+      300    0.272    0.001    0.416    0.001 boolean.py:40(merge_or)
+  1543900    0.253    0.000    0.381    0.000 model.py:77(__len__)
+  1543900    0.231    0.000    0.231    0.000 model.py:211(doc_length)
+
+
+
+--- top 12 by cumulative ---
+         23725101 function calls (22181201 primitive calls) in 7.691 seconds
+
+   Ordered by: cumulative time
+   List reduced from 103 to 12 due to restriction <12>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+      100    0.002    0.000    8.374    0.084 engine.py:96(search)
+      100    0.020    0.000    7.922    0.079 decorators.py:38(wrapper)
+      100    0.827    0.008    7.901    0.079 engine.py:22(search)
+  1543900    0.975    0.000    4.031    0.000 scoring.py:61(score)
+  1543900    0.874    0.000    2.824    0.000 scoring.py:57(idf)
+  1544200    0.937    0.000    1.620    0.000 model.py:80(__iter__)
+  1543900    0.481    0.000    1.394    0.000 model.py:214(df)
+      100    0.218    0.002    1.382    0.014 heapq.py:523(nlargest)
+  1025800    0.482    0.000    1.018    0.000 engine.py:61(<genexpr>)
+4638100/3094200    0.591    0.000    0.844    0.000 {built-in method builtins.len}
+  1026700    0.537    0.000    0.537    0.000 <string>:2(__init__)
+      100    0.002    0.000    0.449    0.004 engine.py:93(_match)
+
+

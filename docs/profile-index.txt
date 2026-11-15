@@ -1,0 +1,45 @@
+index: 171,496 terms, 17,006 docs in 13.18 s
+
+--- top 12 by tottime ---
+         38806099 function calls (38806087 primitive calls) in 13.176 seconds
+
+   Ordered by: internal time
+   List reduced from 147 to 12 due to restriction <12>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    4.806    4.806   13.174   13.174 build.py:39(build_index)
+  7007012    2.628    0.000    3.843    0.000 tokenize.py:39(tokenize)
+  5161890    0.789    0.000    0.789    0.000 {method 'append' of 'array.array' objects}
+  7007012    0.781    0.000    0.781    0.000 {method 'group' of 're.Match' objects}
+  7024060    0.713    0.000    0.713    0.000 {method 'append' of 'list' objects}
+  2580945    0.707    0.000    0.707    0.000 {method 'extend' of 'array.array' objects}
+   171496    0.547    0.000    0.547    0.000 model.py:72(__init__)
+    17010    0.336    0.000    0.336    0.000 {method 'translate' of 'str' objects}
+  2597951    0.315    0.000    0.458    0.000 build.py:71(<genexpr>)
+5161920/5161917    0.311    0.000    0.311    0.000 {built-in method builtins.len}
+    17006    0.179    0.000    0.209    0.000 {built-in method _io.open}
+    17006    0.179    0.000    0.637    0.000 {built-in method builtins.sum}
+
+
+
+--- top 12 by cumulative ---
+         38806099 function calls (38806087 primitive calls) in 13.176 seconds
+
+   Ordered by: cumulative time
+   List reduced from 147 to 12 due to restriction <12>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.002    0.002   13.176   13.176 decorators.py:38(wrapper)
+        1    4.806    4.806   13.174   13.174 build.py:39(build_index)
+  7007012    2.628    0.000    3.843    0.000 tokenize.py:39(tokenize)
+    17007    0.019    0.000    0.839    0.000 corpus.py:70(iter_documents)
+    17007    0.023    0.000    0.808    0.000 corpus.py:46(_iter_txt_tree)
+  5161890    0.789    0.000    0.789    0.000 {method 'append' of 'array.array' objects}
+  7007012    0.781    0.000    0.781    0.000 {method 'group' of 're.Match' objects}
+  7024060    0.713    0.000    0.713    0.000 {method 'append' of 'list' objects}
+  2580945    0.707    0.000    0.707    0.000 {method 'extend' of 'array.array' objects}
+    17006    0.179    0.000    0.637    0.000 {built-in method builtins.sum}
+   171496    0.057    0.000    0.604    0.000 build.py:52(<lambda>)
+   171496    0.547    0.000    0.547    0.000 model.py:72(__init__)
+
+

@@ -16,6 +16,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from findex.scoring import ScorerName
+from findex.semantic import Mode
 from findex.web.service import MARK_OFF, MARK_ON, DocPage, SearchPage, ServiceStats
 
 Query = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
@@ -33,6 +34,11 @@ class SearchParams(BaseModel):
     k: int = Field(10, ge=1, le=MAX_K, description="Results per page.")
     scorer: ScorerName = Field("bm25", description="Ranking function.")
     page: int = Field(1, ge=1, le=MAX_PAGE, description="Page number, from 1.")
+    mode: Mode = Field(
+        "lexical",
+        description="lexical = words and operators (BM25/TF-IDF); semantic = by meaning (best fragment); "
+        "hybrid = both fused with RRF. The last two need embeddings (501 otherwise).",
+    )
 
 
 class PageParams(BaseModel):
@@ -45,6 +51,7 @@ class PageParams(BaseModel):
     k: int = Field(10, ge=1, le=MAX_K)
     scorer: ScorerName = "bm25"
     page: int = Field(1, ge=1, le=MAX_PAGE)
+    mode: Mode = "lexical"
 
 
 class DocParams(BaseModel):
@@ -74,17 +81,20 @@ class Hit(BaseModel):
 class SearchResponse(BaseModel):
     query: str
     scorer: ScorerName
+    mode: Mode = "lexical"
     k: int
     page: int
     pages: int
-    total: int = Field(description="Documents matching the query, over all pages.")
+    total: int = Field(
+        description="Documents matching the query, over all pages (semantic / hybrid: the ranking depth, at most 100)."
+    )
     took_ms: float
     hits: list[Hit]
 
     @classmethod
     def from_page(cls, p: SearchPage) -> SearchResponse:
         return cls(
-            query=p.query, scorer=p.scorer, k=p.k, page=p.page, pages=p.pages, total=p.total,
+            query=p.query, scorer=p.scorer, mode=p.mode, k=p.k, page=p.page, pages=p.pages, total=p.total,
             took_ms=round(p.took_ms, 2),
             hits=[
                 Hit(
@@ -137,6 +147,9 @@ class StatsResponse(BaseModel):
     loaded_at: datetime
     uptime_s: float
     query_cache: CacheInfo
+    semantic_model: str | None = Field(
+        None, description="Embedding model, or null if semantic search is off."
+    )
 
     @classmethod
     def from_stats(cls, s: ServiceStats, version: str) -> StatsResponse:
@@ -145,6 +158,7 @@ class StatsResponse(BaseModel):
             postings=s.postings, avg_doc_length=round(s.avg_doc_length, 2),
             has_positions=s.has_positions, storage=s.storage, index_bytes=s.index_bytes,
             loaded_at=s.loaded_at, uptime_s=round(s.uptime_s, 1),
+            semantic_model=s.semantic_model,
             query_cache=CacheInfo(hits=s.cache_hits, misses=s.cache_misses, size=s.cache_size,
                                   max_size=s.cache_max),
         )  # fmt: skip

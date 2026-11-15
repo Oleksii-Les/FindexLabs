@@ -14,9 +14,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import NotRequired, TypedDict, cast
 
 from findex.engine import search
 from findex.model import DocMeta, Index
@@ -30,6 +30,7 @@ class LabeledQuery(TypedDict):
 
     query: str
     relevant: list[str]
+    kind: NotRequired[str]  # "keyword" | "paraphrase" (only used by the semantic table)
 
 
 def is_relevant(meta: DocMeta, relevant: Iterable[str]) -> bool:
@@ -62,15 +63,94 @@ def evaluate(
     return rows
 
 
+System = Callable[[str, int], list[int]]  # (query, k) -> ranked doc ids
+
+
+def evaluate_systems(
+    index: Index, queries: Sequence[LabeledQuery], systems: dict[str, System], k: int = 5
+) -> list[tuple[LabeledQuery, dict[str, float | None]]]:
+    """P@k of every system on every query (None: the system cannot answer, e.g. a phrase without positions)."""
+    rows: list[tuple[LabeledQuery, dict[str, float | None]]] = []
+    for q in queries:
+        row: dict[str, float | None] = {}
+        for name, system in systems.items():
+            try:
+                ids = system(q["query"], k)
+            except PositionsRequired:
+                row[name] = None
+                continue
+            row[name] = sum(is_relevant(index.doc_meta[d], q["relevant"]) for d in ids[:k]) / k
+        rows.append((q, row))
+    return rows
+
+
+def semantic_systems(
+    index: Index, prefix: Path, corpus_root: Path | None
+) -> dict[str, System]:  # pragma: no cover
+    """BM25 as typed (lab 3), BM25 over the words (OR), semantic, hybrid: the four rows of the table."""
+    from findex.engine import SearchEngine
+    from findex.semantic import SemanticIndex, bag_of_words, search_mode
+
+    engine = SearchEngine(index, BM25(), cache_size=0)
+    sem = SemanticIndex.load(prefix, index)
+
+    def lexical(q: str, k: int) -> list[int]:
+        return [r.doc_id for r in engine.search(q, k, snippets=False)]
+
+    return {
+        "BM25": lexical,
+        "BM25 (OR)": lambda q, k: lexical(bag_of_words(q), k),
+        "semantic": lambda q, k: [h.doc_id for h in search_mode(engine, sem, q, "semantic", k)],
+        "hybrid": lambda q, k: [h.doc_id for h in search_mode(engine, sem, q, "hybrid", k)],
+    }
+
+
+def render_semantic_table(
+    rows: Sequence[tuple[LabeledQuery, dict[str, float | None]]], names: Sequence[str], k: int
+) -> str:
+    out = [
+        f"| # | Kind | Query | {' | '.join(f'P@{k} {n}' for n in names)} |",
+        f"| ---: | --- | --- | {' | '.join('---:' for _ in names)} |",
+    ]
+    for i, (q, row) in enumerate(rows, start=1):
+        cells = ["n/a" if row[n] is None else f"{row[n]:.2f}" for n in names]
+        out.append(f"| {i} | {q.get('kind', '')} | `{q['query']}` | {' | '.join(cells)} |")
+    for kind in dict.fromkeys(q.get("kind", "") for q, _ in rows):
+        part = [row for q, row in rows if q.get("kind", "") == kind]
+        means = [
+            sum(v for r in part if (v := r[n]) is not None)
+            / max(1, sum(r[n] is not None for r in part))
+            for n in names
+        ]
+        out.append(
+            f"| | **mean, {kind or 'all'}** ({len(part)}) | | {' | '.join(f'**{m:.2f}**' for m in means)} |"
+        )
+    return "\n".join(out)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m findex.evaluate")
     ap.add_argument("index", type=Path)
     ap.add_argument("queries", type=Path)
     ap.add_argument("-k", type=int, default=5)
     ap.add_argument("--show", action="store_true", help="print the top-k hits per scorer")
+    ap.add_argument(
+        "--embeddings", type=Path, help="prefix made by `findex embed`: adds semantic and hybrid"
+    )
+    ap.add_argument("--corpus-root", type=Path, default=None)
     args = ap.parse_args(argv)
     queries = cast(list[LabeledQuery], json.loads(args.queries.read_text(encoding="utf-8")))
     scorers: dict[str, Scorer] = {"TF-IDF": TfIdf(), "BM25": BM25()}
+
+    if args.embeddings is not None:  # pragma: no cover - needs a built embedding file
+        with open_index(args.index) as index:
+            systems = semantic_systems(index, args.embeddings, args.corpus_root)
+            print(
+                render_semantic_table(
+                    evaluate_systems(index, queries, systems, args.k), list(systems), args.k
+                )
+            )
+        return 0
 
     with open_index(args.index) as index:
         rows = evaluate(index, queries, scorers, args.k)

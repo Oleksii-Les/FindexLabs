@@ -4,7 +4,7 @@ import unicodedata
 import pytest
 
 from findex.corpus import iter_documents
-from findex.tokenize import normalize, tokenize
+from findex.tokenize import normalize, tokenize, tokenize_all
 
 
 def toks(s: str) -> list[str]:
@@ -58,3 +58,10 @@ def test_tokenizer_is_lazy_and_single_pass():
     assert next(it) == "a"
     assert list(it) == ["b", "c"]
     assert list(it) == []
+
+
+@pytest.mark.parametrize(
+    "text", ["", "Straße STRASSE", "don’t well-known 3.14 п'ять", "a - b — c", "mp3 b2b _x_"]
+)
+def test_tokenize_all_is_the_same_stream_as_tokenize(text: str) -> None:
+    assert tokenize_all(text) == list(tokenize(text))

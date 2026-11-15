@@ -925,3 +925,185 @@ lifespan and the refused pickle. Whole suite: 398 passed, coverage 96 %; pyright
   have one GIL each. Cost: memory per worker and a separate cache per worker.
 * *Why validate with Pydantic at the edge only?* Outside input is untrusted and arrives as strings; inside, the types
   are already guaranteed, so the internal dataclasses stay cheap and the validation cost is paid once per request.
+
+
+# findex — a small search engine you can read in an afternoon
+
+**Live demo: https://TODO-your-service.onrender.com/** (free tier: the first request after a pause may take a minute)
+<!-- TODO: paste the real address of the deployed v1.0.0 service here, and re-check that the link opens -->
+
+An inverted index, BM25 ranking on NumPy, an optional search *by meaning*, a JSON API and a web page — plain Python,
+about 7 000 lines of code and 4 000 of tests, every number below measured and reproducible with one command.
+
+![searching the live service: keywords, then a hybrid search by meaning](docs/demo.gif)
+<sub>The GIF is the real page on the 17 006-document test corpus. It shows how the page works, it is not evidence of
+quality: the evidence is the precision table in [Semantic search](#semantic-search-and-what-it-does-not-do-yet).</sub>
+
+<!-- TODO: the three numbers were measured on the 17 006-document sandbox corpus (2 vCPU); re-measure on your Gutenberg corpus and edit them -->
+| Corpus | p95 of one search | Biggest speed-up |
+| --- | --- | --- |
+| **17 006 documents**, 46.6 MB, 7.0 M words, 171 k terms | **133 ms** under 20 simultaneous requests (was 1 015 ms) | **58x** for scoring a query (28.7 ms → 0.49 ms) |
+
+Video walk-through (2–3 min): <!-- TODO: link --> · All measurements of labs 1–8 in one place: [docs/results.md](docs/results.md)
+· Profiling write-up with flame graphs: [docs/profiling.md](docs/profiling.md)
+
+## The path of the data
+
+```mermaid
+flowchart LR
+    C["corpus<br/>.txt files"] --> T["tokenizer<br/>NFC · casefold · regex"]
+    W["crawler<br/>asyncio, polite"] -->|"crawl.jsonl"| C
+    T --> I[("inverted index<br/>int32 postings<br/>+ doc lengths")]
+    I --> M["matching<br/>AND OR NOT, phrases"]
+    M --> S["scorer<br/>BM25 / TF-IDF<br/>NumPy + argpartition"]
+    C --> F["fragments<br/>~800 chars"] --> E["embeddings<br/>.npy matrix"]
+    E --> V["cosine<br/>best fragment"]
+    S --> R{{"RRF<br/>(hybrid)"}}
+    V --> R
+    S --> A["API<br/>FastAPI + Pydantic"]
+    R --> A
+    V --> A
+    A --> P["page<br/>Jinja2 + htmx"]
+```
+
+| Stage | Module | Lab |
+| --- | --- | --- |
+| corpus, tokenizer | `corpus.py`, `tokenize.py` | 1 |
+| inverted index, Boolean search, save/load | `model.py`, `build.py`, `boolean.py`, `store.py` | 2 |
+| ranking, query language, snippets | `scoring.py`, `query.py`, `engine.py`, `snippets.py` | 3 |
+| typing, tests, packaging, CI, the `findex` command | `cli.py`, `tests/`, `.github/` | 4 |
+| parallel indexing, the GIL | `parallel.py`, `parbench.py` | 5 |
+| asynchronous crawler | `crawler.py`, `mirror.py`, `crawl_run.py` | 6 |
+| web service: API, page, Docker, deploy | `web/`, `Dockerfile`, `render.yaml` | 7 |
+| profiling, NumPy scoring, semantic and hybrid search | `vector.py`, `semantic.py` | 8 |
+
+## Try it
+
+```bash
+uv sync --extra semantic
+uv run python scripts/fetch_gutenberg.py --count 150            # ~50 MB of books (or any folder of .txt files)
+uv run findex index data/gutenberg --out index.bin --positions
+uv run findex search index.bin 'white whale AND NOT moby' -k 5
+uv run findex embed index.bin --out emb                          # fragments -> vectors (about 15 s per 50 MB)
+uv run findex search index.bin "a ship hunting a giant animal" --mode hybrid --embeddings emb
+uv run findex serve --index index.bin                            # page on http://127.0.0.1:8000, API docs at /api/docs
+```
+
+`EMBEDDINGS_PATH=emb uv run findex serve …` turns on the "Search by" selector on the page and `mode=` in the API.
+Docker: `docker build -t findex . && docker run --rm -p 8000:8000 findex` (details in [Deploy](#deploy)).
+
+### Search modes
+
+| `mode` | What it does | Needs |
+| --- | --- | --- |
+| `lexical` (default) | words, `AND` / `OR` / `NOT`, parentheses, `"exact phrase"`; BM25 or TF-IDF | the index |
+| `semantic` | cosine similarity between the query and every ~800-character fragment; a document scores as its best fragment | embeddings |
+| `hybrid` | BM25 over the query's words (OR) and the semantic ranking, fused with Reciprocal Rank Fusion (k = 60) | embeddings |
+
+The JSON API: `GET /search?q=&k=&scorer=&mode=&page=`, `GET /docs/{id}`, `GET /stats`, `GET /health`; schema at `/api/docs`.
+Semantic and hybrid return the best 100 documents, paged like the others (`total` is then at most 100).
+
+## What made it faster (lab 8)
+
+1. **Measure first** ([docs/profiling.md](docs/profiling.md)). Three hotspots were written down *before* any change:
+   the scorer called once per posting (51 % of a query), a `Posting` object built per posting (20 %), a heap over
+   `SearchResult` objects (18 %). All three were Python interpreter overhead, not arithmetic.
+2. **Arrays instead of objects** ([`vector.py`](src/findex/vector.py)). The postings were already `array('I')`; NumPy
+   looks at the same memory as `int32` (no copy). BM25 becomes one expression per term, top-k is `np.argpartition`.
+   A test checks that ranking, tie-breaks and the floats are identical to the pure-Python scorer of lab 3.
+3. **The honest part:** the NumPy path is *slower* for a term that occurs in 1–3 documents (fixed cost of ~30 µs),
+   so the engine falls back to the old loop below 128 postings per query. After the change the profile's top line is
+   the Boolean `merge_or` (77 % of a query): matching in pure Python is the next thing to attack, not scoring.
+
+| Query (17 006 docs, BM25, k = 10) | Postings scored | Lab 3 scorer | NumPy | Speed-up |
+| --- | ---: | ---: | ---: | ---: |
+| a frequent term | 17 006 | 34.1 ms | 0.62 ms | **55x** |
+| a mid-frequency term | 340 | 0.74 ms | 0.064 ms | **12x** |
+| 3 common terms | 15 439 | 28.7 ms | 0.49 ms | **58x** |
+| a term in 3 documents | 3 | 0.017 ms | 0.037 ms | 0.5x (NumPy loses) |
+| a term in 1 document | 1 | 0.011 ms | 0.030 ms | 0.4x (NumPy loses) |
+
+The service, one worker, 20 connections, `oha` (query cache off, snippets included):
+
+| | req/s | p50 | p95 | p99 |
+| --- | ---: | ---: | ---: | ---: |
+| lexical, loop of lab 3 | 28 | 746 ms | 1 015 ms | 1 133 ms |
+| lexical, NumPy | **210** | 94 ms | 133 ms | 164 ms |
+| semantic | 137 | 145 ms | 208 ms | 259 ms |
+| hybrid | 73 | 276 ms | 376 ms | 441 ms |
+
+## Semantic search, and what it does not do (yet)
+
+`findex embed` cuts each document into fragments, turns each into a unit vector and stores them as one `float32`
+matrix (`emb.npy`, memory-mapped when opened). A query is turned into a vector the same way and **one matrix product**
+gives the similarity to every fragment.
+
+* The model is pluggable. **`lsa`** (default: TF-IDF + truncated SVD, 256 dimensions, no download, NumPy only at query
+  time, so it fits a free server) and **`minilm`** (`--model minilm`, a neural sentence encoder such as
+  all-MiniLM-L6-v2, needs `uv sync --extra minilm`).
+* **Not run here:** the build sandbox cannot reach huggingface.co, so the `minilm` adapter is tested only against a fake
+  model. Everything below was measured with `lsa`. Run `uv run findex embed index.bin --out emb-minilm --model minilm`
+  and then the evaluation command on your machine to get the MiniLM column.
+
+Precision@5 on 15 labelled queries over the 17 006-document corpus (relevant = documents of the named Python modules;
+labels written before looking at any ranking: [`eval/sandbox_queries.json`](eval/sandbox_queries.json)):
+
+| | BM25 (as typed) | BM25 (OR of the words) | semantic (LSA) | hybrid (RRF) |
+| --- | ---: | ---: | ---: | ---: |
+| 10 keyword queries | 0.30 | 0.30 | **0.44** | 0.32 |
+| 5 paraphrases (no module name, few shared words) | 0.00 | 0.08 | 0.04 | 0.04 |
+
+What the table shows, and what it does not:
+
+* Keyword queries: meaning-based ranking is a little better than BM25 here (0.44 against 0.30), but with 10 queries one
+  query is 0.1 of the mean; treat it as "not worse", not as a win.
+* Paraphrases: **nothing works**, including semantic and hybrid. The expected effect (semantic finds what BM25 cannot) did
+  not appear with LSA on this corpus. The corpus is part of the reason: documentation of hundreds of libraries, where
+  "relevant" means one standard-library module, and fragments from other packages that talk about the same topic count as wrong.
+* Not in the table, to be taken as anecdotes (five questions typed by hand, all reported): for *sending an e-mail with
+  attachments*, *threads waiting for a lock* and *converting a date string* hybrid put a clearly right document in its top
+  4 (`email/parser`, `threading`, `isoparser`); for *parse options given on the command line* it returned a relevant but
+  not the standard-library module (`distutils`); *compress a folder into an archive* it missed. Semantic alone found a
+  right document for one of the five (`optparse`).
+* A sanity check that the pipeline is not broken: words nearest to *database* are *sqlalchemy, sql, dbapi*; the first
+  25 words of a random fragment find that fragment's document first for 21 of 40 tries.
+
+Reproduce: `uv run python -m findex.evaluate index.bin eval/sandbox_queries.json --embeddings emb --corpus-root <corpus>`.
+
+## Limits, stated plainly
+
+* **One index per process, in memory.** Four workers hold four copies; the index file is read fully at start (0.7 s for
+  50 MB). There is no incremental update: new documents mean rebuilding.
+* **Matching is still a Python merge** (see above); on very large result sets it is now the slowest stage.
+* **Semantic quality is unproven.** LSA is a 1990s technique and the table above says it; the neural adapter is written
+  but was never run end to end. 15 labelled queries cannot separate small differences.
+* **Pagination** for semantic and hybrid stops at 100 documents (a similarity search has no "non-matching" documents).
+* **Tokenizer**: no stemming and no stop-word list, English-centred ideas of relevance; Unicode letters work.
+* **Snippets read files from disk** at query time, so the corpus must be present next to the index (`CORPUS_ROOT`).
+* **Index files are trusted**: the server refuses the pickle format (loading it can run code), the binary format is plain data.
+* **Numbers come from a 2-vCPU Linux sandbox** (and a free cloud plan is slower still); they show the *shape* of the
+  results, rerun the scripts in `experiments/` on your own machine.
+
+## Deploy
+
+`render.yaml` (Render Blueprint) and `fly.toml` describe the same service: a two-stage `Dockerfile` (uv builds the
+environment from `uv.lock`; the runtime image has no build tools and runs as user 10001), `/health` as the platform
+check, every setting an environment variable (`INDEX_PATH`, `EMBEDDINGS_PATH`, `CORPUS_ROOT`, `PORT`, `WEB_CONCURRENCY`,
+`VECTORIZED`, …; see `src/findex/web/settings.py`). The image downloads 150 books, builds the index and the embeddings
+while building (`--build-arg GUTENBERG_COUNT=0` skips that and expects a mounted index).
+
+## Development
+
+```bash
+uv sync --extra semantic
+uv run ruff check . && uv run ruff format --check . && uv run pyright   # strict typing
+uv run pytest --cov=findex                                              # 490+ tests, coverage > 90 %
+uv run pytest tests/bench --benchmark-enable --benchmark-only           # timings of build_index and search
+```
+
+CI runs lint, types and tests on Python 3.12 and 3.13, and a separate `bench` job (timings, the NumPy/loop ratio guard).
+Tags `lab-01` … `lab-08`, and `v1.0.0` for the finished project.
+
+## History
+
+Lab-by-lab notes, design decisions and the original per-lab READMEs: [docs/lab-notes.md](docs/lab-notes.md).

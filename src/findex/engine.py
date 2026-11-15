@@ -15,6 +15,7 @@ from findex.model import Index
 from findex.query import parse
 from findex.scoring import BM25, Scorer, SearchResult
 from findex.snippets import Marks, make_snippet, read_text
+from findex.vector import VectorIndex
 
 log = logging.getLogger(__name__)
 
@@ -31,8 +32,13 @@ def search(
     snippets: bool = False,
     window: int = 80,
     marks: Marks = ("**", "**"),
+    vectors: VectorIndex | None = None,
 ) -> list[SearchResult]:
     """Top-``k`` documents for ``query``, best first.
+
+    With ``vectors`` (and BM25 / TF-IDF) the scoring and the top-k run in NumPy (``findex.vector``);
+    the ranking is the same as the loop below, which stays as the reference and as the fallback for
+    custom scorers.
 
     ``matcher`` (query -> doc ids) lets a caller supply a cached matcher; by default
     the query tree is evaluated here. Scores are accumulated per document in a dict
@@ -43,23 +49,26 @@ def search(
     ids = matcher(query) if matcher is not None else tree.evaluate(index, engine)
     if not ids:
         return []
-    wanted = set(ids)
     terms = list(dict.fromkeys(tree.terms()))  # unique, in query order
-
-    scores: dict[int, float] = defaultdict(float)
-    for term in terms:
-        postings = index.get(term)
-        if postings is None:
-            continue
-        for posting in postings:
-            if posting.doc_id in wanted:
-                scores[posting.doc_id] += scorer.score(term, posting, index)
-    if not terms:  # e.g. only "NOT x": nothing to rank by, every match ties at 0
-        scores = dict.fromkeys(ids, 0.0)
-
     meta = index.doc_meta
-    hits = (SearchResult(score=s, doc_id=d, title=meta[d].title) for d, s in scores.items())
-    top = heapq.nlargest(k, hits)  # uses SearchResult's order=True
+
+    if vectors is not None and terms and vectors.supports(scorer) and vectors.worth_it(terms):
+        ranked = vectors.rank(ids, terms, scorer, k)
+        top = [SearchResult(score=s, doc_id=d, title=meta[d].title) for d, s in ranked]
+    else:
+        wanted = set(ids)
+        scores: dict[int, float] = defaultdict(float)
+        for term in terms:
+            postings = index.get(term)
+            if postings is None:
+                continue
+            for posting in postings:
+                if posting.doc_id in wanted:
+                    scores[posting.doc_id] += scorer.score(term, posting, index)
+        if not terms:  # e.g. only "NOT x": nothing to rank by, every match ties at 0
+            scores = dict.fromkeys(ids, 0.0)
+        hits = (SearchResult(score=s, doc_id=d, title=meta[d].title) for d, s in scores.items())
+        top = heapq.nlargest(k, hits)  # uses SearchResult's order=True
 
     if snippets:
         out: list[SearchResult] = []
@@ -81,8 +90,11 @@ class SearchEngine:
         *,
         engine: EngineName = "merge",
         cache_size: int = 256,
+        vectorized: bool = True,
     ) -> None:
         self.index = index
+        # NumPy view of the index; None = the pure-Python scoring loop of lab 3 (reference, benchmarks)
+        self.vectors: VectorIndex | None = VectorIndex(index) if vectorized else None
         self.scorer = scorer or BM25()
         self.engine: EngineName = engine
         # lru_cache needs hashable args (a str is) and returns the same tuple on a hit.
@@ -122,6 +134,7 @@ class SearchEngine:
             snippets=snippets,
             window=window,
             marks=marks,
+            vectors=self.vectors,
         )
 
     def cache_info(self):

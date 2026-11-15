@@ -35,6 +35,8 @@ async def _load_index(app: FastAPI) -> None:
             SearchService.from_path,
             settings.index_path,
             corpus_root=settings.corpus_root,
+            embeddings=settings.embeddings_path,
+            vectorized=settings.vectorized,
             cache_size=settings.cache_size,
             window=settings.snippet_window,
         )

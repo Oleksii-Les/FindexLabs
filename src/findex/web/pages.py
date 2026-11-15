@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Path, Query, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 
 from findex.query import PositionsRequired, QuerySyntaxError
+from findex.semantic import SemanticUnavailable
 from findex.web.deps import AppSettings, MaybeService
 from findex.web.schemas import PageParams, ViewParams
 from findex.web.service import DocumentNotFound, DocumentUnavailable
@@ -34,8 +35,10 @@ def home(
     error: str | None = None
     if params.q:
         try:
-            result = service.search(params.q, k=params.k, scorer=params.scorer, page=params.page)
-        except (QuerySyntaxError, PositionsRequired) as exc:
+            result = service.search(
+                params.q, k=params.k, scorer=params.scorer, page=params.page, mode=params.mode
+            )
+        except (QuerySyntaxError, PositionsRequired, SemanticUnavailable) as exc:
             error = str(exc)  # a human typed this: show the reason on the page, status 200
     partial = request.headers.get("hx-request") == "true"
     context = {
@@ -43,6 +46,7 @@ def home(
         "stats": service.stats(),
         "examples": [q for q in settings.examples if service.index.has_positions or '"' not in q],
         "q": params.q, "k": params.k, "scorer": params.scorer, "page": params.page,
+        "mode": params.mode, "semantic_ready": service.semantic_ready,
         "result": result, "error": error,
     }  # fmt: skip
     response = render(request, "_results.html" if partial else "index.html", context)

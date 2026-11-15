@@ -8,6 +8,7 @@ primary_region = "waw"
 [env]
   PORT = "8000"
   INDEX_PATH = "/data/index.bin"
+  EMBEDDINGS_PATH = "/data/emb"
   CORPUS_ROOT = "/data/books"
   WEB_CONCURRENCY = "1"
 

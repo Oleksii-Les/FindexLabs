@@ -40,3 +40,14 @@ def tokenize(text: str) -> Iterator[str]:
     """Yield normalized tokens lazily (``finditer``, not ``findall``)."""
     for match in _TOKEN_RE.finditer(normalize(text)):
         yield match.group()
+
+
+def tokenize_all(text: str) -> list[str]:
+    """The same tokens as ``tokenize``, but as a list from ONE native call (``re.findall``).
+
+    ``tokenize`` resumes a generator and calls ``match.group()`` for every token -- 7 million times on a
+    47 MB corpus (docs/profiling.md, hotspot 2 of ``findex index``). The index builder consumes every token
+    of a document anyway, so it asks for the whole list of ONE document (bounded memory); ``tokenize``
+    stays lazy for callers that stream a corpus (``stats``) and is what the tests of lab 1 pin down.
+    """
+    return _TOKEN_RE.findall(normalize(text))

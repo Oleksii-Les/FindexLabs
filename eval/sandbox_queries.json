@@ -1,0 +1,17 @@
+[
+  {"query": "command line arguments parser", "relevant": ["python3.13/argparse", "python3.13/optparse", "python3.13/getopt"], "kind": "keyword"},
+  {"query": "sqlite database connection cursor", "relevant": ["sqlite3"], "kind": "keyword"},
+  {"query": "zip archive compress files", "relevant": ["zipfile", "tarfile", "gzip"], "kind": "keyword"},
+  {"query": "logging handler formatter", "relevant": ["logging"], "kind": "keyword"},
+  {"query": "unit test case assert", "relevant": ["unittest", "doctest"], "kind": "keyword"},
+  {"query": "json encode decode", "relevant": ["json"], "kind": "keyword"},
+  {"query": "thread lock semaphore", "relevant": ["threading"], "kind": "keyword"},
+  {"query": "decimal arithmetic precision rounding", "relevant": ["decimal"], "kind": "keyword"},
+  {"query": "email message mime header", "relevant": ["email"], "kind": "keyword"},
+  {"query": "date time timezone", "relevant": ["datetime", "zoneinfo"], "kind": "keyword"},
+  {"query": "keeping a diary of what a program did while it ran", "relevant": ["logging"], "kind": "paraphrase"},
+  {"query": "storing structured records in one local file and asking questions in a declarative language", "relevant": ["sqlite3"], "kind": "paraphrase"},
+  {"query": "numbers that never suffer from binary floating point surprises", "relevant": ["decimal", "fractions"], "kind": "paraphrase"},
+  {"query": "doing many things at once on a single thread by politely yielding control", "relevant": ["asyncio"], "kind": "paraphrase"},
+  {"query": "turning program objects into text for storage and reading them back", "relevant": ["json", "pickle", "marshal", "shelve"], "kind": "paraphrase"}
+]

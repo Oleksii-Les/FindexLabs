@@ -19,7 +19,7 @@ from findex.model import (
     PostingView,
     StorageName,
 )
-from findex.tokenize import tokenize
+from findex.tokenize import tokenize_all
 
 _TITLE_RE = re.compile(r"^Title:[ \t]*(.+)$", re.MULTILINE)
 
@@ -65,12 +65,12 @@ def build_index(
         items: Iterable[tuple[str, int, list[int] | None]]
         if positions:
             occ: defaultdict[str, list[int]] = defaultdict(list)
-            for pos, tok in enumerate(tokenize(doc.text)):
+            for pos, tok in enumerate(tokenize_all(doc.text)):
                 occ[tok].append(pos)
             items = [(t, len(p), p) for t, p in occ.items()]
             doc_lengths[doc_id] = sum(len(p) for p in occ.values())
         else:
-            counts = Counter(tokenize(doc.text))
+            counts = Counter(tokenize_all(doc.text))
             items = [(t, c, None) for t, c in counts.items()]
             doc_lengths[doc_id] = counts.total()
 

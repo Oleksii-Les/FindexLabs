@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from findex.query import PositionsRequired, QuerySyntaxError
+from findex.semantic import SemanticUnavailable
 from findex.web.middleware import request_id_of
 from findex.web.templating import render
 
@@ -37,6 +38,12 @@ def install_error_handlers(app: FastAPI) -> None:
         body = {"detail": [{"type": kind, "loc": ["query", "q"], "msg": str(exc)}],
                 "request_id": request_id_of(request.scope)}  # fmt: skip
         return JSONResponse(body, status_code=422)
+
+    @app.exception_handler(SemanticUnavailable)
+    async def no_semantic(request: Request, exc: Exception) -> Response:
+        # A valid request for a feature this deployment does not have: 501, not a client error.
+        body = {"detail": str(exc), "request_id": request_id_of(request.scope)}
+        return JSONResponse(body, status_code=501)
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, exc: RequestValidationError) -> Response:

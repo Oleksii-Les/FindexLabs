@@ -1,5 +1,5 @@
 {#- The block htmx swaps. Also included in the full page, so both paths render identical HTML. -#}
-{%- macro page_url(p) -%}/?q={{ q|urlencode }}&amp;k={{ k }}&amp;scorer={{ scorer }}&amp;page={{ p }}{%- endmacro -%}
+{%- macro page_url(p) -%}/?q={{ q|urlencode }}&amp;k={{ k }}&amp;scorer={{ scorer }}&amp;mode={{ mode }}&amp;page={{ p }}{%- endmacro -%}
 {%- macro hx(url) -%}href="{{ url }}" hx-get="{{ url }}" hx-target="#results" hx-swap="outerHTML show:window:top" hx-push-url="true"{%- endmacro -%}
 <section id="results" aria-live="polite">
 {% if error %}
@@ -12,10 +12,11 @@
   </div>
   {% else %}
   <p class="summary">
-    <strong>{{ result.total|number }}</strong> document{{ '' if result.total == 1 else 's' }} for “{{ q }}”
+    {% if result.mode == 'lexical' %}<strong>{{ result.total|number }}</strong> document{{ '' if result.total == 1 else 's' }} for “{{ q }}”
+    {%- else %}Top <strong>{{ result.total|number }}</strong> by {{ 'meaning' if result.mode == 'semantic' else 'keywords + meaning' }} for “{{ q }}”{% endif %}
     · page {{ result.page }} of {{ result.pages }}
     · {{ '%.0f'|format(result.took_ms) }} ms
-    · <span class="muted">{{ 'BM25' if result.scorer == 'bm25' else 'TF-IDF' }}</span>
+    · <span class="muted">{% if result.mode == 'semantic' %}cosine similarity{% elif result.mode == 'hybrid' %}BM25 + meaning, RRF{% else %}{{ 'BM25' if result.scorer == 'bm25' else 'TF-IDF' }}{% endif %}</span>
   </p>
   {% if not result.hits %}
   <div class="empty"><p>There is no page {{ result.page }}. <a {{ hx(page_url(result.pages)) }}>Go to the last page ({{ result.pages }})</a>.</p></div>
@@ -25,7 +26,7 @@
     <li class="hit">
       <h2><a href="/view/{{ h.doc_id }}?q={{ q|urlencode }}">{{ h.title }}</a></h2>
       {% if h.snippet %}<p class="snippet">{{ h.snippet|highlight }}</p>{% endif %}
-      <p class="meta"><span class="score" title="Relevance score">{{ '%.2f'|format(h.score) }}</span><span>document {{ h.doc_id }}</span></p>
+      <p class="meta"><span class="score" title="{{ 'Cosine similarity of the best fragment' if result.mode == 'semantic' else 'Reciprocal rank fusion score' if result.mode == 'hybrid' else 'Relevance score' }}">{{ ('%.3f' if result.mode == 'hybrid' else '%.2f')|format(h.score) }}</span><span>document {{ h.doc_id }}</span></p>
     </li>
     {% endfor %}
   </ol>

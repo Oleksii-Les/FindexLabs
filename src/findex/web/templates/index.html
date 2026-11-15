@@ -22,6 +22,15 @@
           <option value="tfidf"{% if scorer == 'tfidf' %} selected{% endif %}>TF-IDF</option>
         </select>
       </label>
+      {% if semantic_ready %}
+      <label>Search by
+        <select name="mode">
+          <option value="lexical"{% if mode == 'lexical' %} selected{% endif %}>Keywords</option>
+          <option value="semantic"{% if mode == 'semantic' %} selected{% endif %}>Meaning</option>
+          <option value="hybrid"{% if mode == 'hybrid' %} selected{% endif %}>Both (hybrid)</option>
+        </select>
+      </label>
+      {% endif %}
       <label>Per page
         <select name="k">
           {% for n in (10, 20, 50) %}<option value="{{ n }}"{% if k == n %} selected{% endif %}>{{ n }}</option>{% endfor %}

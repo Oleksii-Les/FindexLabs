@@ -32,13 +32,18 @@ Responses = dict[int | str, dict[str, Any]]
 _422: Responses = {422: {"description": "Invalid parameter or malformed query"}}
 _503: Responses = {503: {"model": ErrorResponse}}
 _404: Responses = {404: {"model": ErrorResponse}}
+_501: Responses = {
+    501: {"model": ErrorResponse, "description": "mode needs embeddings, none loaded"}
+}
 
 
-@router.get("/search", response_model=SearchResponse, responses=_422 | _503)
+@router.get("/search", response_model=SearchResponse, responses=_422 | _503 | _501)
 def search_route(params: Annotated[SearchParams, Query()], service: Service) -> SearchResponse:
     """Ranked, paginated full-text search. ``k`` is the page size, ``page`` starts at 1."""
     return SearchResponse.from_page(
-        service.search(params.q, k=params.k, scorer=params.scorer, page=params.page)
+        service.search(
+            params.q, k=params.k, scorer=params.scorer, page=params.page, mode=params.mode
+        )
     )
 
 

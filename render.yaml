@@ -10,6 +10,8 @@ services:
     envVars:
       - key: INDEX_PATH
         value: /data/index.bin
+      - key: EMBEDDINGS_PATH
+        value: /data/emb
       - key: CORPUS_ROOT
         value: /data/books
       - key: WEB_CONCURRENCY

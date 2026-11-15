@@ -4,7 +4,8 @@
 #   docker build -t findex .                                  # 150 Gutenberg books, indexed at build time
 #   docker build --build-arg GUTENBERG_COUNT=0 -t findex .    # no corpus: bring your own index
 #   docker run --rm -p 8000:8000 findex
-#   docker run --rm -p 8000:8000 -v "$PWD:/data:ro" -e INDEX_PATH=/data/index.bin findex
+#   docker run --rm -p 8000:8000 -v "$PWD:/data:ro" -e INDEX_PATH=/data/index.bin -e EMBEDDINGS_PATH=/data/emb findex
+#   (no EMBEDDINGS_PATH file -> the service starts without the semantic / hybrid modes)
 #
 # Stage 1 (builder) has uv and the build tools; stage 2 (runtime) only gets the finished
 # virtualenv, the index and the books. Dependencies are installed exactly as in uv.lock.
@@ -17,20 +18,25 @@ WORKDIR /app
 # 1) dependencies only: this layer is cached until uv.lock or pyproject.toml change
 COPY pyproject.toml uv.lock README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --no-install-project
+    uv sync --locked --no-dev --extra semantic --no-install-project
 
 # 2) the project itself, as a regular (non-editable) install into the same venv
 COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --no-editable
+    uv sync --locked --no-dev --extra semantic --no-editable
 
 # 3) the data: download books and build the index with the code we just installed
+#    EMBED=1 also builds the semantic search files (LSA: no model download; --dim 128 keeps them small)
 ARG GUTENBERG_COUNT=150
+ARG EMBED=1
 COPY scripts ./scripts
 RUN mkdir -p /data/books && \
     if [ "$GUTENBERG_COUNT" -gt 0 ]; then \
         .venv/bin/python scripts/fetch_gutenberg.py --count "$GUTENBERG_COUNT" --out /data/books && \
-        .venv/bin/findex index /data/books --out /data/index.bin --positions; \
+        .venv/bin/findex index /data/books --out /data/index.bin --positions && \
+        if [ "$EMBED" = "1" ]; then \
+            .venv/bin/findex embed /data/index.bin --out /data/emb --dim 128 --corpus-root /data/books; \
+        fi; \
     fi
 
 
@@ -41,7 +47,7 @@ COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder --chown=app:app /data /data
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
-    INDEX_PATH=/data/index.bin CORPUS_ROOT=/data/books \
+    INDEX_PATH=/data/index.bin CORPUS_ROOT=/data/books EMBEDDINGS_PATH=/data/emb \
     PORT=8000 WEB_CONCURRENCY=1
 USER app
 EXPOSE 8000
