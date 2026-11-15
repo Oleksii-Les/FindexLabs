@@ -2,6 +2,7 @@
 
 import shutil
 import subprocess
+import tomllib
 import zipfile
 from pathlib import Path
 
@@ -28,4 +29,7 @@ def test_wheel_contains_package_and_console_script(tmp_path: Path):
     assert not any(n.startswith("tests/") for n in names)  # src layout: tests are not shipped
     assert "[console_scripts]" in entry_points and "findex = findex.cli:app" in entry_points
     assert "Requires-Dist: typer" in metadata and "Requires-Dist: rich" in metadata
-    assert "Version: 0.4.0" in metadata
+    version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"][
+        "version"
+    ]
+    assert f"Version: {version}" in metadata  # the wheel carries the version of pyproject.toml

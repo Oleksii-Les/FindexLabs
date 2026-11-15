@@ -44,6 +44,7 @@ from findex.corpus import Document, count_documents, iter_documents
 from findex.engine import SearchEngine
 from findex.logging_setup import configure_logging
 from findex.model import Index, StorageName
+from findex.parallel import BuildTimings, ExecutorName, build_parallel
 from findex.query import PositionsRequired, QuerySyntaxError
 from findex.scoring import ScorerName, make_scorer
 from findex.store import FormatName, IndexFormatError, detect_format, open_index, save
@@ -154,6 +155,18 @@ def index_cmd(
         StorageName, typer.Option("--storage", help="In-memory postings representation.")
     ] = "array",
     fmt: Annotated[FormatName, typer.Option("--format", help="File format.")] = "binary",
+    workers: Annotated[
+        int | None,
+        typer.Option("--workers", "-j", min=1, help="Parallel workers (default: all usable CPUs)."),
+    ] = None,
+    executor: Annotated[
+        ExecutorName | None,
+        typer.Option(
+            "--executor",
+            help="serial | threads | processes. Default: processes for corpora of at least "
+            "2 MB, serial for smaller ones.",
+        ),
+    ] = None,
     verbose: VerboseOpt = 0,
 ) -> None:
     """Build an inverted index from CORPUS and save it."""
@@ -166,11 +179,16 @@ def index_cmd(
             fail(f"no documents found in {corpus}")
         if limit is not None:
             total = limit if total is None else min(total, limit)
-        docs: Iterable[Document] = iter_documents(corpus)
-        if limit is not None:
-            docs = islice(docs, limit)
 
-        t0 = time.perf_counter()
+        # The partial/merge pipeline needs a directory of files (workers read their own
+        # paths) and produces array storage. Everything else uses the Lab 04 builder.
+        partitioned = corpus.is_dir() and storage == "array"
+        if not partitioned and (workers not in (None, 1) or executor not in (None, "serial")):
+            log.warning(
+                "--workers/--executor need a directory of .txt files and --storage array; "
+                "building serially"
+            )
+
         progress = Progress(
             SpinnerColumn(),
             TextColumn("[bold]indexing[/bold]"),
@@ -179,11 +197,27 @@ def index_cmd(
             TimeElapsedColumn(),
             console=Console(stderr=True),  # the bar is diagnostics: stderr
         )
+        timings: BuildTimings | None = None
+        t0 = time.perf_counter()
         with progress:
             task = progress.add_task("index", total=total)
-            index = build_index(
-                _tracked(docs, progress, task), storage=storage, positions=positions
-            )
+            if partitioned:
+                index, timings = build_parallel(
+                    corpus,
+                    executor=executor,
+                    workers=workers,
+                    positions=positions,
+                    limit=limit,
+                    on_chunk_done=lambda part: progress.advance(task, part.n_docs),
+                    on_doc=lambda: progress.advance(task),
+                )
+            else:
+                docs: Iterable[Document] = iter_documents(corpus)
+                if limit is not None:
+                    docs = islice(docs, limit)
+                index = build_index(
+                    _tracked(docs, progress, task), storage=storage, positions=positions
+                )
         built = time.perf_counter() - t0
         if index.num_docs == 0:
             fail(f"no documents found in {corpus}")
@@ -193,7 +227,7 @@ def index_cmd(
     table = Table(title="Index built", show_header=False, title_justify="left")
     table.add_column(style="bold")
     table.add_column(justify="right")
-    for label, value in (
+    rows = [
         ("documents", f"{index.num_docs:,}"),
         ("terms", f"{len(index):,}"),
         ("postings", f"{index.n_postings():,}"),
@@ -201,7 +235,17 @@ def index_cmd(
         ("storage / format", f"{storage} / {fmt}"),
         ("file", f"{out}  ({size / 1024 / 1024:.1f} MiB)"),
         ("build time", f"{built:.2f} s"),
-    ):
+    ]
+    if timings is not None:
+        rows.insert(
+            5,
+            (
+                "executor",
+                f"{timings.executor} x {timings.workers} ({timings.chunks} chunks)",
+            ),
+        )
+        rows.append(("map / merge", f"{timings.map_s:.2f} s / {timings.merge_s:.2f} s"))
+    for label, value in rows:
         table.add_row(label, value)
     Console().print(table)
 

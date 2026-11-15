@@ -199,3 +199,55 @@ def test_repeat_shows_the_query_cache(tiny_index_file: Path):
     )
     assert result.exit_code == 0
     assert result.stderr.count("cache miss") == 1 and result.stderr.count("cache HIT") == 2
+
+
+# ------------------------------------------------------------- Lab 05: parallel indexing
+@pytest.mark.parametrize("executor", ["serial", "threads"])
+def test_index_executor_flag_gives_the_same_index(tiny_corpus: Path, tmp_path: Path, executor: str):
+    out = tmp_path / f"{executor}.bin"
+    result = runner.invoke(
+        app, ["index", str(tiny_corpus), "-o", str(out), "--executor", executor, "--workers", "2"]
+    )
+    assert result.exit_code == 0, result.output
+    assert f"{executor} x" in result.stdout and "map / merge" in result.stdout
+    reference = tmp_path / "ref.bin"
+    runner.invoke(app, ["index", str(tiny_corpus), "-o", str(reference), "--executor", "serial"])
+    assert out.read_bytes() == reference.read_bytes()
+
+
+def test_small_corpus_is_built_serially_by_default(tiny_corpus: Path, tmp_path: Path):
+    result = runner.invoke(app, ["index", str(tiny_corpus), "-o", str(tmp_path / "i.bin")])
+    assert result.exit_code == 0 and "serial x 1" in result.stdout
+
+
+def test_workers_must_be_positive(tiny_corpus: Path, tmp_path: Path):
+    result = runner.invoke(
+        app, ["index", str(tiny_corpus), "-o", str(tmp_path / "i.bin"), "-j", "0"]
+    )
+    assert result.exit_code == 2
+
+
+def test_parallel_flags_are_ignored_with_a_warning_for_jsonl(tmp_path: Path):
+    src = tmp_path / "c.jsonl"
+    src.write_text(json.dumps({"text": "a b c"}) + "\n", encoding="utf-8")
+    result = runner.invoke(
+        app,
+        [
+            "index",
+            str(src),
+            "-o",
+            str(tmp_path / "i.bin"),
+            "--workers",
+            "4",
+            "--executor",
+            "threads",
+        ],
+    )
+    assert result.exit_code == 0 and "building serially" in result.stderr
+
+
+def test_other_storage_uses_the_lab4_builder(tiny_corpus: Path, tmp_path: Path):
+    result = runner.invoke(
+        app, ["index", str(tiny_corpus), "-o", str(tmp_path / "i.bin"), "--storage", "slots"]
+    )
+    assert result.exit_code == 0 and "executor" not in result.stdout

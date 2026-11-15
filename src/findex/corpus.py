@@ -18,8 +18,11 @@ class Document(NamedTuple):
     text: str
 
 
-def _read_text(path: Path) -> str:
-    """Read a file as UTF-8; on bad bytes log it and substitute U+FFFD."""
+def read_document(path: Path) -> str:
+    """Read one document as UTF-8; on bad bytes log it and substitute U+FFFD.
+
+    Public since Lab 5: worker processes receive *paths* and read their own documents.
+    """
     try:
         return path.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
@@ -27,10 +30,22 @@ def _read_text(path: Path) -> str:
         return path.read_text(encoding="utf-8", errors="replace")
 
 
+def list_documents(root: Path) -> list[Path]:
+    """All ``*.txt`` files below ``root`` in a STABLE order (sorted).
+
+    The doc_id of a document is its position in this list, so a fixed order means the same
+    corpus always gives the same index (also on another machine, and no matter how many
+    workers build it). Only the *paths* are held in memory -- O(number of files), not O(bytes).
+    """
+    root = Path(root)
+    if not root.is_dir():  # rglob on a missing directory would quietly yield nothing
+        raise FileNotFoundError(f"corpus directory not found: {root}")
+    return sorted(p for p in root.rglob("*.txt") if p.is_file())
+
+
 def _iter_txt_tree(root: Path) -> Iterator[tuple[Path, str]]:
-    for path in root.rglob("*.txt"):  # rglob is itself lazy
-        if path.is_file():
-            yield path, _read_text(path)
+    for path in list_documents(root):
+        yield path, read_document(path)  # the text is read lazily, one file per next()
 
 
 def _iter_jsonl(path: Path) -> Iterator[tuple[Path, str]]:
@@ -78,5 +93,5 @@ def count_documents(root: Path) -> int | None:
     (a ``.jsonl`` file would have to be read to be counted)."""
     root = Path(root)
     if root.is_dir():
-        return sum(1 for p in root.rglob("*.txt") if p.is_file())
+        return len(list_documents(root))
     return None

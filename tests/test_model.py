@@ -16,7 +16,7 @@ def test_posting_is_hashable_and_in_sets():
 def test_frozen_and_slots():
     p = Posting(1, 1)
     with pytest.raises(dataclasses.FrozenInstanceError):
-        p.tf = 5  # type: ignore[misc]
+        p.tf = 5  # type: ignore[misc]  # assigning to a frozen field on purpose
     assert not hasattr(p, "__dict__")
     assert hasattr(PlainPosting(1, 1), "__dict__")
 

@@ -13,7 +13,7 @@ def test_search_result_ordering():
     assert lo < hi and sorted([hi, lo]) == [lo, hi] and max(hi, lo) is hi
     assert SearchResult(1.0, 7, "title A") == SearchResult(1.0, 7, "title B")  # title not compared
     with pytest.raises(FrozenInstanceError):
-        lo.score = 5  # type: ignore[misc]
+        lo.score = 5  # type: ignore[misc]  # assigning to a frozen field on purpose
     assert "[3]" in str(hi) and "y" in str(hi)
 
 
