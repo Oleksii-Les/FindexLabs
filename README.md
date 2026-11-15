@@ -618,3 +618,192 @@ arrival-order independence), **byte-identical files** for serial / threads / pro
 (thread and process), spawn safety of `python -m findex`, the benchmark's statistics/table/plot, and the CLI flags.
 Process-pool tests are marked `slow` (spawn costs ~1 s each on Windows). The Windows-only branch of `peak_rss_bytes` is excluded
 from coverage (it runs only on Windows).
+
+
+# Lab 06 — An asynchronous crawler
+
+`findex crawl` downloads pages with **one thread and one event loop** and writes them to a JSONL file that
+`findex index` already understands (Lab 01's `iter_documents` reads `.jsonl`). Version 0.6.0.
+
+## Permission to crawl
+
+The default target is **my own server**: `python -m findex.mirror` (module `findex/mirror.py`), a small local site on
+`127.0.0.1` with a `robots.txt`, a fixed latency per request and optional faults. Nobody else's server is touched, so
+no permission is needed.
+
+The crawler is polite by construction, whatever the target: an honest `User-Agent` with a contact address
+(`findex-crawler/0.6.0 (+mailto:you@example.org)`; `--contact` is mandatory), `robots.txt` per host (including
+`Crawl-delay`), a **ceiling on pages** (`--max-pages`, at most 100 000), a limit on simultaneous requests per host and a
+minimum pause between requests to the same host, and it **never leaves the hosts of the start URLs** (a redirect to
+another host is refused before the request is made).
+
+## Quick start
+
+```powershell
+# terminal 1: a local site to crawl (prints "LISTENING <port>"); --faults adds a 429, a 503, a hang, a redirect loop
+uv run python -m findex.mirror --pages 400 --latency-ms 30 --port 8765
+
+# terminal 2: crawl it, then index and search what was collected
+uv run findex crawl http://127.0.0.1:8765/ --contact you@example.org --max-pages 200 -c 20 --per-host 20 --delay 0
+uv run findex index crawl.jsonl --out crawl.bin
+uv run findex search crawl.bin "whale"
+```
+
+While it runs, `rich` shows live counters on stderr: pages collected / ceiling, pages per second, **requests waiting for a
+response right now**, errors, retries, queue depth, robots-skipped, bytes. `crawl.log` keeps one line per URL.
+
+| Option | Meaning (default) |
+| --- | --- |
+| `URL...` | start URLs; the crawl stays on their hosts |
+| `--contact` | e-mail or URL for the User-Agent (**required**) |
+| `--max-pages N` | ceiling on collected pages (200) |
+| `-c/--concurrency N` | simultaneous requests, all hosts together (5) |
+| `--per-host N` | simultaneous requests to one host (2) |
+| `--delay S` | minimum seconds between request *starts* to one host (0.1); a larger `Crawl-delay` from robots.txt wins |
+| `--timeout S`, `--retries N` | per attempt (10 s); retries for 429 / 5xx / timeouts, at most 3 (3) |
+| `--max-depth N` | links to follow from a seed (unlimited) |
+| `--out`, `--log` | `crawl.jsonl`, `crawl.log` |
+| `--debug-loop` | asyncio debug mode: counts callbacks that blocked the event loop (printed in the summary) |
+| `-q`, `-v/-vv` | no live counters / crawler lines on stderr |
+
+Output line (`iter_documents` reads the `text` field; the title is its first line):
+`{"url": ..., "title": ..., "text": ..., "status": 200, "depth": 2, "bytes": 3412, "fetched_at": "..."}`.
+
+## Design (`src/findex/crawler.py`)
+
+| Piece | What it does |
+| --- | --- |
+| `canonicalize(url, base)` | one string per page: scheme and host lower-case, default port and credentials dropped, `#fragment` dropped, dot-segments resolved, `//` collapsed, trailing slash dropped (root stays `/`), query sorted by name; `None` for `mailto:`, `javascript:`, `ftp:`... |
+| `parse_html(bytes, base)` | selectolax (Lexbor, C): title, visible text (no script/style/noscript), de-duplicated canonical links |
+| `fetch(client, url, ...)` | **one URL**: `asyncio.timeout` around every attempt (headers and body), records status / bytes / elapsed / attempts; **retries only 429, 5xx and timeouts, at most 3 times**; sleep = `max(Retry-After, jittered backoff)`; no retry for other 4xx, redirect loops, connection errors, or a `Retry-After` longer than 60 s; body capped at 2 MiB; never raises for network/HTTP problems |
+| `backoff_delay` | exponential backoff with **full jitter**: `uniform(0, min(20 s, 0.5 s * 2**attempt))` |
+| `RobotsCache` | `robots.txt` **per host** (scheme + host + port), fetched once (a lock per host), cached. 2xx → parsed; 4xx → everything allowed; 5xx / 429 / timeout / network error → host **disallowed** (RFC 9309) |
+| `HostLimiter` | `async with limiter(url):` = a semaphore **per host** + a minimum pause between request starts to that host + **one global semaphore** for all requests (taken last, held only while the request is in flight) |
+| `crawl(config)` | **async generator**. A FIFO queue of `(url, depth)`; `2 x concurrency` workers inside an `asyncio.TaskGroup`; a `seen` set of canonical URLs so nothing is fetched twice; yields `Page` objects as they arrive (a bounded queue gives back-pressure to a slow consumer). At `max_pages` (or an empty frontier) the workers are cancelled and the HTTP client is closed (use `contextlib.aclosing`) |
+
+Decisions worth knowing:
+
+* **The TaskGroup is not around the `yield`.** Workers live in a producer task; the generator only reads a queue. A failing
+  worker therefore cannot inject a cancellation into the consumer's code (the known hazard of `yield` inside a TaskGroup).
+  A *bug* in a worker (anything but a network/HTTP problem) is not swallowed: it comes out of `crawl()` as an `ExceptionGroup`.
+* **The page budget is a reservation.** A URL reserves one of `max_pages` slots before it is fetched; if it fails, the slot is
+  released and a waiting URL takes it. So a crawl with a few errors still ends with exactly `max_pages` pages, and never makes
+  more than `max_pages` page requests.
+* **Nothing blocks the loop.** All waiting is `await`. Parsing one page is about a millisecond of C code. The JSONL write is
+  one short `write` per page. The CPU-heavy part, indexing, is **not** done in the crawl: `findex index crawl.jsonl` runs
+  afterwards (see "Where the loop would stop").
+* **Memory** is the frontier (`seen` set, queue) and at most a few pages in flight; pages are written as they arrive.
+
+## Benchmark
+
+Same start URL, same `--max-pages 200`, concurrency 1, 5 and 20. Every measurement is a fresh child process (so peak RSS is
+that run's own), one unmeasured warm-up, round-robin over the setups, median of 3. The server is `findex.mirror` with 30 ms
+latency per request (a stand-in for the network round trip).
+
+```powershell
+uv run python -m findex.crawlbench run --pages 200 --runs 3 --latency-ms 30 --out bench\crawl.json
+uv run python -m findex.crawlbench report bench\crawl.json
+```
+
+Machine: Intel Core i5-11320H, 16 GB RAM, Windows 11, Python 3.12.3
+
+
+| Setup | Wall, s (median) | min-max | Pages | Pages/s | Errors | CPU, s | Peak RSS | Speedup |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| c=1 | 7.78 | 7.71-7.88 | 200 | 25.7 | 0 | 0.81 | 38 MiB | 1.00x |
+| c=5 | 1.79 | 1.78-1.80 | 200 | 111.6 | 0 | 0.92 | 39 MiB | 4.34x |
+| c=20 | 1.60 | 1.50-1.60 | 200 | 125.1 | 0 | 1.47 | 39 MiB | 4.87x |
+| c=20, polite (2/host, 50 ms) | 10.11 | 10.10-10.13 | 200 | 19.8 | 0 | 0.86 | 39 MiB | 0.77x |
+
+## Why 20 requests in one thread beat the Lab 05 approach
+
+Lab 05's work was **CPU-bound**: to go faster you need more cores, each worker needs its own interpreter (process) or a
+GIL-free build, and every extra worker costs memory, start-up and pickling: 2.1x on 4 physical cores for 2.4x the CPU time.
+A crawler's work is **waiting**. In the table above the CPU time is about 0.6 s for a crawl that takes 6.8 s with one
+request: the processor is idle more than 90 % of the time, waiting for the (simulated) network. A coroutine that awaits a
+socket costs a few hundred bytes and no thread; while it waits, the loop runs another one. Twenty requests overlap their
+waiting, so the wall time falls from `200 x 30 ms` toward `200 x 30 ms / 20`, the **same CPU time** (0.42 s vs 0.59 s),
+the same 36 MiB, no pickling and no GIL contention, because the one thread is never *blocked* on the GIL, it is *waiting
+for the network*, which is exactly the situation where the GIL is released anyway (Lab 05, section 7: threads scale for I/O).
+Asyncio is the same idea as the I/O-bound thread experiment, with a cheaper unit than a thread.
+
+## What the per-host limit costs, and why it stays
+
+The last row is the price: with 2 simultaneous requests per host and 50 ms between request starts one host can be asked at most
+`min(per_host / latency, 1 / delay) = min(2 / 30 ms, 1 / 50 ms) = 20` pages per second, whatever the global concurrency of
+20. The crawl is **about 18x slower than the unlimited one** (10.08 s vs 0.57 s) and even slower than plain concurrency 1
+(6.80 s). It stays because the host, not the crawler, is the shared resource: twenty simultaneous connections from
+one address are indistinguishable from an attack, get a 429 or a ban, and slow the site for its real users. The benchmark
+may remove the limit only because the server is mine. With several hosts in the queue the limit costs nothing: while one
+host is "resting", the workers serve the others (the global semaphore is taken last for exactly this reason).
+
+## Where the loop would stop if indexing ran inside a coroutine
+
+`experiments/loop_blocking.py` crawls 60 pages (concurrency 10, 30 ms server latency) and gives every page 20 ms of CPU
+work (tokenize and count: a stand-in for indexing). A *heartbeat* coroutine wakes every 10 ms and records how late it was.
+
+```powershell
+uv run python experiments\loop_blocking.py
+uv run python -X dev experiments\loop_blocking.py --modes inline     # asyncio prints "Executing <Task ...> took 0.0xx seconds"
+```
+
+
+| Where the 20 ms of work runs | Wall, s | Pages/s | Heartbeat, worst delay | p95 delay |
+| --- | ---: | ---: | ---: | ---: |
+| nowhere (just crawl) | 0.33 | 180 | 6 ms | 3 ms |
+| **inline** (a plain call in the `async for` body) | 1.41 | 43 | **158 ms** | 75 ms |
+| `await asyncio.to_thread(...)` | 1.44 | 42 | 36 ms | 34 ms |
+| `await loop.run_in_executor(ProcessPoolExecutor, ...)` | 1.36 | 44 | 6 ms | 2 ms |
+
+Inline, every call is a stretch of 20 ms (and more, for real pages) in which **no other coroutine runs**: no response is
+read, no timeout can fire, no new request starts, and the 30 ms of waiting that should overlap with other pages is added to
+the work instead of hidden behind it. The wall time of the sandbox is similar in all three variants only because it has
+one usable core for the whole experiment (60 x 20 ms = 1.2 s of CPU has to run somewhere); on a multi-core machine the
+process variant also wins on wall time, and the heartbeat column shows the *loop's* health: 158 ms vs 6 ms. A thread keeps
+the loop turning (CPython hands the GIL over every 5 ms) but the work still competes with it. The design of this lab
+avoids the problem altogether: crawl first, `findex index` afterwards, outside the loop (and with Lab 05's processes).
+
+`findex crawl --debug-loop` turns on asyncio's debug mode and prints "event-loop blocked warnings: N" (callbacks that ran
+longer than 100 ms without an `await`); a normal crawl prints 0. `tests/test_crawler.py` proves the detector works with a
+`time.sleep(0.3)` inside a coroutine (it is reported), and that a 30-page crawl in debug mode reports nothing.
+
+## A failure that was handled: 429, a 503 that recovers, a hang, a redirect loop
+
+`python -m findex.mirror --faults` serves `/flaky/429` (429 with `Retry-After: 1` the first time), `/flaky/503` (503 twice),
+`/slow` (answers after 5 s), `/redirect-loop` (302 to itself), `/missing` (404) and a PDF, all linked from the first page.
+`findex crawl http://127.0.0.1:8766/ --contact me@example.org --max-pages 60 --timeout 1.5 ...` still collected all 60 good
+pages; `crawl.log` tells the story:
+
+```
+19:43:33,639 WARNING findex.crawler: retry 1/3 for http://127.0.0.1:8766/flaky/429 after HTTP 429 (Retry-After=1): sleeping 1.00 s
+19:43:33,651 WARNING findex.crawler: retry 1/3 for http://127.0.0.1:8766/flaky/503 after HTTP 503 (Retry-After=-): sleeping 0.13 s
+19:43:33,840 WARNING findex.crawler: retry 2/3 for http://127.0.0.1:8766/flaky/503 after HTTP 503 (Retry-After=-): sleeping 0.57 s
+19:43:34,453 INFO    findex.crawler.access: GET http://127.0.0.1:8766/flaky/503 status=200 bytes=59 time=0.862s attempts=3 depth=1
+19:43:34,672 INFO    findex.crawler.access: GET http://127.0.0.1:8766/flaky/429 status=200 bytes=56 time=1.112s attempts=2 depth=1
+```
+
+The 429 waited exactly the `Retry-After` the server asked for (the jittered backoff alone would have been ~0.1 s) and then
+succeeded; the 503 backed off 0.13 s, then 0.57 s (random within a doubling cap) and succeeded on the third attempt.
+The same run, for pages that **do not** recover, with no retry storm:
+
+```
+FAIL .../missing error="HTTP 404" status=404 attempts=1 time=0.066s depth=1                  <- 4xx: never retried
+FAIL .../redirect-loop error="too many redirects" status=None attempts=1 time=0.230s depth=1  <- a loop does not heal
+retry 1/3 ... /slow after timeout ... sleeping 0.25 s   (x3)
+FAIL .../slow error="timeout" status=None attempts=4 time=8.173s depth=1                      <- 1 try + 3 retries, then give up
+SKIP .../private/secret reason=robots.txt          SKIP .../file.pdf reason=content-type 'application/pdf'
+```
+
+The summary table shows `errors 3`, `retries 6`, `skipped by robots.txt 1`. A failed URL gives its page-budget slot back, so the
+ceiling is still reached with good pages.
+
+## Tests
+
+`uv run pytest`: 353 tests, 96 % line + branch coverage (CI threshold 90 %). **No test touches the outside network**:
+`tests/test_crawler.py` uses `httpx.MockTransport` for everything (canonicalization incl. a Hypothesis idempotence property,
+parsing, `fetch` retry rules and backoff sleeps, `Retry-After`, robots outcomes, limiter caps and spacing, dedup, ceiling,
+depth, budget slots, cancellation and client closing, a worker bug surfacing, the blocked-loop detector).
+`tests/test_crawl_cli.py` and `tests/test_crawlbench.py` run the CLI and the benchmark against the local mirror on 127.0.0.1.
+The tests were also checked by mutation (removing `Retry-After`, retrying 4xx, keeping fragments, dropping `seen`, dropping
+the per-host semaphore, allowing on a 5xx robots.txt, not closing the client: each makes a test fail).
+Not covered, on purpose: the `main()` of `findex.mirror` (it serves until Ctrl+C) and a few defensive branches.

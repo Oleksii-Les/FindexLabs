@@ -41,12 +41,16 @@ from rich.text import Text
 from findex.boolean import EngineName
 from findex.build import build_index
 from findex.corpus import Document, count_documents, iter_documents
+from findex.crawl_run import build_user_agent, run_crawl
+from findex.crawler import CrawlConfig, RetryPolicy, canonicalize
 from findex.engine import SearchEngine
 from findex.logging_setup import configure_logging
 from findex.model import Index, StorageName
 from findex.parallel import BuildTimings, ExecutorName, build_parallel
+from findex.parbench import peak_rss_bytes
 from findex.query import PositionsRequired, QuerySyntaxError
 from findex.scoring import ScorerName, make_scorer
+from findex.stats import fmt_bytes
 from findex.store import FormatName, IndexFormatError, detect_format, open_index, save
 
 log = logging.getLogger(__name__)
@@ -125,6 +129,113 @@ def main(
     del version_flag  # handled by the eager callback
     ctx.obj = verbose  # remembered for the subcommands
     configure_logging(verbose)
+
+
+# -------------------------------------------------------------------------- crawl
+@app.command("crawl")
+def crawl_cmd(
+    ctx: typer.Context,
+    seeds: Annotated[
+        list[str],
+        typer.Argument(metavar="URL...", help="Start URL(s). The crawl never leaves their hosts."),
+    ],
+    out: Annotated[Path, typer.Option("--out", "-o", help="JSONL file to write.")] = Path(
+        "crawl.jsonl"
+    ),
+    contact: Annotated[
+        str | None,
+        typer.Option(
+            help="E-mail or URL where the site owner can reach you (goes into the User-Agent)."
+        ),
+    ] = None,
+    max_pages: Annotated[
+        int, typer.Option("--max-pages", min=1, max=100_000, help="Ceiling on collected pages.")
+    ] = 200,
+    concurrency: Annotated[
+        int, typer.Option("--concurrency", "-c", min=1, help="Simultaneous requests, in total.")
+    ] = 5,
+    per_host: Annotated[
+        int, typer.Option("--per-host", min=1, help="Simultaneous requests to ONE host.")
+    ] = 2,
+    delay: Annotated[
+        float,
+        typer.Option("--delay", min=0.0, help="Minimum seconds between request starts to a host."),
+    ] = 0.1,
+    timeout: Annotated[float, typer.Option(min=0.1, help="Seconds per request attempt.")] = 10.0,
+    retries: Annotated[
+        int, typer.Option(min=0, max=3, help="Retries for 429 / 5xx / timeouts (at most 3).")
+    ] = 3,
+    max_depth: Annotated[
+        int | None, typer.Option("--max-depth", min=0, help="Links to follow from a seed.")
+    ] = None,
+    log_file: Annotated[
+        Path, typer.Option("--log", help="One line per URL (status, bytes, time).")
+    ] = Path("crawl.log"),
+    debug_loop: Annotated[
+        bool,
+        typer.Option(
+            "--debug-loop", help="asyncio debug mode: report callbacks that block the event loop."
+        ),
+    ] = False,
+    quiet: Annotated[bool, typer.Option("--quiet", "-q", help="No live counters.")] = False,
+    verbose: VerboseOpt = 0,
+) -> None:
+    """Crawl a site politely (asyncio) and write the pages to a JSONL file for `findex index`."""
+    apply_verbosity(ctx, verbose)
+    if contact is None:
+        fail("--contact is required: put an e-mail or URL in the User-Agent (be a polite guest)")
+    for seed in seeds:
+        if canonicalize(seed) is None:
+            fail(f"not an http(s) URL: {seed}")
+    try:
+        config = CrawlConfig(
+            seeds=tuple(seeds),
+            user_agent=build_user_agent(contact),
+            max_pages=max_pages,
+            concurrency=concurrency,
+            per_host=per_host,
+            delay=delay,
+            timeout=timeout,
+            max_depth=max_depth,
+            policy=RetryPolicy(retries=retries),
+        )
+    except ValueError as exc:
+        fail(str(exc))
+    with expected_errors():
+        try:
+            stats, blocked = run_crawl(
+                config,
+                out,
+                log_file,
+                live=not quiet and Console(stderr=True).is_terminal,
+                debug_loop=debug_loop,
+                verbosity=max(int(ctx.obj or 0), verbose),
+            )
+        except KeyboardInterrupt:
+            fail(f"interrupted; pages collected so far are in {out}", 130)
+    table = Table(title="Crawl finished", show_header=False, title_justify="left")
+    table.add_column(style="bold")
+    table.add_column(justify="right")
+    rss = peak_rss_bytes()
+    rows = [
+        ("pages", f"{stats.pages:,}"),
+        ("errors", str(stats.errors)),
+        ("retries", str(stats.retries)),
+        ("skipped by robots.txt", str(stats.robots_skipped)),
+        ("wall time", f"{stats.elapsed:.2f} s"),
+        ("pages / second", f"{stats.pages_per_second:.1f}"),
+        ("downloaded", fmt_bytes(stats.bytes)),
+        ("peak RSS", "n/a" if rss is None else fmt_bytes(rss)),
+        ("statuses", ", ".join(f"{k}: {v}" for k, v in sorted(stats.statuses.items())) or "-"),
+        ("output / log", f"{out}  /  {log_file}"),
+    ]
+    if debug_loop:
+        rows.append(("event-loop blocked warnings", str(blocked)))
+    for label, value in rows:
+        table.add_row(label, value)
+    Console().print(table)
+    if stats.pages == 0:
+        fail("no pages were collected (see the log file)")
 
 
 # --------------------------------------------------------------------------- index
