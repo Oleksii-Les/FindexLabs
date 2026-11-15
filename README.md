@@ -812,7 +812,7 @@ Not covered, on purpose: the `main()` of `findex.mirror` (it serves until Ctrl+C
 
 # Lab 07 — Search on the web (v0.7.0)
 
-**Live service: https://dashboard.render.com/blueprint/new** &nbsp;·&nbsp; API docs: `/api/docs` &nbsp;·&nbsp; health: `/health`
+**Live service: https://findex-jil3.onrender.com/** &nbsp;·&nbsp; API docs: `/api/docs` &nbsp;·&nbsp; health: `/health`
 
 `findex serve` puts the index behind HTTP: a JSON API, an HTML search page with highlighted snippets, and a
 Docker image that runs the same thing on a public host. Code: `src/findex/web/`.
@@ -888,8 +888,7 @@ the work, 3 s warm-up not counted). Same sandbox (2 vCPU), 588 documents, `q=fun
 | 1 worker, `def` | 109 | 176 | 279 | 354 |
 | 1 worker, `def` (the real app, with middleware/logging) | 110 | 178 | 255 | 291 |
 | 4 workers (`findex serve --workers 4`, the real app) | 251 | 61 | 178 | 238 |
-| Deployed service | TODO | TODO | TODO | TODO |
-<!-- TODO: run   oha -z 15s -c 20 --no-tui "https://YOUR-URL/search?q=function+OR+object&k=10"   and fill the last row. -->
+
 
 How the rows tie to labs 5–6. One worker is one interpreter and **one GIL**: whichever of the threads runs the search
 holds it, so a thread pool does not add search throughput (lab 5: threads do not speed up pure-Python CPU work) — the
