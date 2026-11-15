@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · {{ site|default('findex') }}{% endblock %}
+{% block content %}
+<section class="hero compact">
+  <h1>{{ title }}</h1>
+  {% for m in messages %}<p class="lede">{{ m }}</p>{% endfor %}
+  {% if request_id %}<p><code>{{ request_id }}</code></p>{% endif %}
+  <p><a href="/">← Back to search</a></p>
+</section>
+{% endblock %}

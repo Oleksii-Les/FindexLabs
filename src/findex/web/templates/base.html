@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Full-text search over {{ stats.documents|number if stats else 'a collection of' }} documents: BM25 ranking, boolean operators and phrases.">
+  <meta name="htmx-config" content='{"allowEval": false, "allowScriptTags": false, "includeIndicatorStyles": false}'>
+  {% block head %}{% endblock %}
+  <title>{% block title %}{{ site|default('findex') }} · full-text search{% endblock %}</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23245c5a'/%3E%3Ccircle cx='14' cy='14' r='6.5' fill='none' stroke='%23fff' stroke-width='3'/%3E%3Cpath d='M19 19l7 7' stroke='%23fff' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/style.css?v={{ version }}">
+  <script src="/static/htmx.min.js?v=2.0.4" defer></script>
+</head>
+<body>
+  <a class="skip" href="#content">Skip to content</a>
+  <header class="top">
+    <a class="brand" href="/"><span class="logo" aria-hidden="true"></span>{{ site|default('findex') }}</a>
+    <nav aria-label="Site">
+      <a href="/api/docs">API</a>
+      <a href="/stats">Stats</a>
+    </nav>
+  </header>
+  <main id="content">{% block content %}{% endblock %}</main>
+  <footer class="foot">
+    <span>{{ site|default('findex') }} {{ version }}</span>
+    <span>BM25 &amp; TF-IDF ranking · inverted index in Python</span>
+  </footer>
+</body>
+</html>

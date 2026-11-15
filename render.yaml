@@ -1,0 +1,20 @@
+# Render Blueprint: New -> Blueprint -> pick this repo. All configuration is environment variables.
+services:
+  - type: web
+    name: findex
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health        # Render calls this; 503 while the index loads, 200 when ready
+    autoDeploy: true
+    envVars:
+      - key: INDEX_PATH
+        value: /data/index.bin
+      - key: CORPUS_ROOT
+        value: /data/books
+      - key: WEB_CONCURRENCY
+        value: "1"                  # the free plan has 0.1 CPU; raise it on a bigger plan
+      - key: LOG_LEVEL
+        value: INFO
+      - key: SITE_NAME
+        value: findex

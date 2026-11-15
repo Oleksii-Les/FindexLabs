@@ -238,6 +238,62 @@ def crawl_cmd(
         fail("no pages were collected (see the log file)")
 
 
+# -------------------------------------------------------------------------- serve
+@app.command("serve")
+def serve_cmd(
+    ctx: typer.Context,
+    index: Annotated[
+        Path | None,
+        typer.Option(
+            "--index", "-i", help="Index to serve (default: $INDEX_PATH, else index.bin)."
+        ),
+    ] = None,
+    host: Annotated[
+        str, typer.Option(help="Interface to listen on (0.0.0.0 inside a container).")
+    ] = "127.0.0.1",
+    port: Annotated[
+        int | None, typer.Option(min=1, max=65535, help="Port (default: $PORT, else 8000).")
+    ] = None,
+    workers: Annotated[
+        int | None,
+        typer.Option(
+            "--workers", "-w", min=1, help="Worker processes (default: $WEB_CONCURRENCY, else 1)."
+        ),
+    ] = None,
+    verbose: VerboseOpt = 0,
+) -> None:
+    """Serve the index over HTTP: a JSON API, a search page and /health (uvicorn + FastAPI)."""
+    apply_verbosity(ctx, verbose)
+    import os
+
+    from pydantic import ValidationError
+
+    from findex.web.settings import Settings
+
+    if index is not None:
+        os.environ["INDEX_PATH"] = str(index)  # worker processes read their settings from here
+    try:
+        settings = Settings()
+    except ValidationError as exc:
+        fail(
+            "bad configuration: "
+            + "; ".join(f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in exc.errors())
+        )
+    require_file(settings.index_path)
+    import uvicorn
+
+    uvicorn.run(
+        "findex.web.app:create_app",
+        factory=True,  # every worker process builds its own app, and loads its own copy of the index
+        host=host,
+        port=port or settings.port,
+        workers=workers or settings.workers,
+        log_config=None,  # create_app configures logging (with request ids) itself
+        access_log=False,
+        server_header=False,
+    )
+
+
 # --------------------------------------------------------------------------- index
 def _tracked(docs: Iterable[Document], progress: Progress, task: TaskID) -> Iterator[Document]:
     """Pass documents through while advancing the bar: still lazy, one document at a time."""

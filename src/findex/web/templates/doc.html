@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}{{ doc.title }} · {{ site }}{% endblock %}
+{% block content %}
+{%- macro nav_link(offset, label, rel) -%}<a rel="{{ rel }}" href="/view/{{ doc.doc_id }}?offset={{ offset }}&amp;limit={{ limit }}{% if q %}&amp;q={{ q|urlencode }}{% endif %}">{{ label }}</a>{%- endmacro -%}
+<article class="doc">
+  <p class="crumbs"><a href="/{% if q %}?q={{ q|urlencode }}{% endif %}">← {% if q %}Results for “{{ q }}”{% else %}Search{% endif %}</a></p>
+  <h1>{{ doc.title }}</h1>
+  <p class="meta"><span>document {{ doc.doc_id }}</span><span>{{ doc.source }}</span><span>{{ doc.tokens|number }} words</span>
+    <span>characters {{ doc.offset|number }}–{{ doc.end|number }} of {{ doc.total_chars|number }}</span></p>
+  <nav class="pager small" aria-label="Document pages">
+    {% if doc.offset > 0 %}{{ nav_link([doc.offset - limit, 0]|max, '← Earlier', 'prev') }}{% else %}<span class="step off">← Earlier</span>{% endif %}
+    {% if doc.first_match is not none and (doc.first_match < doc.offset or doc.first_match >= doc.end) %}{{ nav_link([doc.first_match - 300, 0]|max, 'Jump to first match', 'first') }}{% endif %}
+    {% if doc.end < doc.total_chars %}{{ nav_link(doc.end, 'Later →', 'next') }}{% else %}<span class="step off">Later →</span>{% endif %}
+  </nav>
+  <div class="text" lang="en">{{ doc.text|highlight }}</div>
+  <nav class="pager small" aria-label="Document pages">
+    {% if doc.offset > 0 %}{{ nav_link([doc.offset - limit, 0]|max, '← Earlier', 'prev') }}{% else %}<span class="step off">← Earlier</span>{% endif %}
+    {% if doc.end < doc.total_chars %}{{ nav_link(doc.end, 'Later →', 'next') }}{% else %}<span class="step off">Later →</span>{% endif %}
+  </nav>
+</article>
+{% endblock %}

@@ -86,3 +86,28 @@ def make_snippet(
     parts.append(text[cur:hi])
     body = " ".join("".join(parts).split())  # collapse newlines / runs of spaces
     return f"{'...' if lo > 0 else ''}{body}{'...' if hi < len(text) else ''}"
+
+
+def highlight(
+    text: str, terms: Sequence[str], marks: Marks = ("**", "**"), limit: int = 5000
+) -> str:
+    """``text`` with every whole-token occurrence of ``terms`` wrapped in ``marks`` (at most
+    ``limit`` of them: a page of a book must not turn into thousands of regex callbacks)."""
+    pat = _pattern(tuple(terms))
+    if pat is None:
+        return text
+    count = 0
+
+    def wrap(m: re.Match[str]) -> str:
+        nonlocal count
+        count += 1
+        return f"{marks[0]}{m.group()}{marks[1]}" if count <= limit else m.group()
+
+    return pat.sub(wrap, text)
+
+
+def first_match(text: str, terms: Sequence[str]) -> int | None:
+    """Offset of the first whole-token occurrence of any of ``terms`` in ``text``, or None."""
+    pat = _pattern(tuple(terms))
+    m = pat.search(text) if pat is not None else None
+    return m.start() if m else None

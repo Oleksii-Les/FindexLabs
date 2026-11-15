@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}{% if q %}{{ q }} · {% endif %}{{ site }} · full-text search{% endblock %}
+{% block content %}
+<section class="hero{% if q %} compact{% endif %}">
+  {% if not q %}
+  <h1>Search {{ stats.documents|number }} documents</h1>
+  <p class="lede">Ranked full-text search over {{ stats.tokens|number }} words. Combine terms with
+    <code>AND</code>, <code>OR</code>, <code>NOT</code> and parentheses{% if stats.has_positions %}; quote an
+    <code>"exact phrase"</code>{% endif %}.</p>
+  {% endif %}
+  <form class="search" action="/" method="get" role="search"
+        hx-get="/" hx-target="#results" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#busy">
+    <div class="field">
+      <input type="search" name="q" value="{{ q }}" required maxlength="200" autocomplete="off"
+             placeholder="{{ examples[:3]|join(', ') if examples else 'Search…' }}…" aria-label="Search query"{% if not q %} autofocus{% endif %}>
+      <button type="submit">Search</button>
+    </div>
+    <div class="options">
+      <label>Ranking
+        <select name="scorer">
+          <option value="bm25"{% if scorer == 'bm25' %} selected{% endif %}>BM25</option>
+          <option value="tfidf"{% if scorer == 'tfidf' %} selected{% endif %}>TF-IDF</option>
+        </select>
+      </label>
+      <label>Per page
+        <select name="k">
+          {% for n in (10, 20, 50) %}<option value="{{ n }}"{% if k == n %} selected{% endif %}>{{ n }}</option>{% endfor %}
+        </select>
+      </label>
+      <span id="busy" class="busy" role="status" aria-label="Searching"></span>
+    </div>
+  </form>
+</section>
+{% include "_results.html" %}
+{% endblock %}

@@ -1,0 +1,60 @@
+{#- The block htmx swaps. Also included in the full page, so both paths render identical HTML. -#}
+{%- macro page_url(p) -%}/?q={{ q|urlencode }}&amp;k={{ k }}&amp;scorer={{ scorer }}&amp;page={{ p }}{%- endmacro -%}
+{%- macro hx(url) -%}href="{{ url }}" hx-get="{{ url }}" hx-target="#results" hx-swap="outerHTML show:window:top" hx-push-url="true"{%- endmacro -%}
+<section id="results" aria-live="polite">
+{% if error %}
+  <div class="notice error" role="alert"><strong>Can’t run that query.</strong> {{ error }}</div>
+{% elif result %}
+  {% if result.total == 0 %}
+  <div class="empty">
+    <h2>No documents match “{{ q }}”</h2>
+    <p>Check the spelling, try fewer words, or join alternatives with <code>OR</code>.</p>
+  </div>
+  {% else %}
+  <p class="summary">
+    <strong>{{ result.total|number }}</strong> document{{ '' if result.total == 1 else 's' }} for “{{ q }}”
+    · page {{ result.page }} of {{ result.pages }}
+    · {{ '%.0f'|format(result.took_ms) }} ms
+    · <span class="muted">{{ 'BM25' if result.scorer == 'bm25' else 'TF-IDF' }}</span>
+  </p>
+  {% if not result.hits %}
+  <div class="empty"><p>There is no page {{ result.page }}. <a {{ hx(page_url(result.pages)) }}>Go to the last page ({{ result.pages }})</a>.</p></div>
+  {% endif %}
+  <ol class="hits" start="{{ (result.page - 1) * result.k + 1 }}">
+    {% for h in result.hits %}
+    <li class="hit">
+      <h2><a href="/view/{{ h.doc_id }}?q={{ q|urlencode }}">{{ h.title }}</a></h2>
+      {% if h.snippet %}<p class="snippet">{{ h.snippet|highlight }}</p>{% endif %}
+      <p class="meta"><span class="score" title="Relevance score">{{ '%.2f'|format(h.score) }}</span><span>document {{ h.doc_id }}</span></p>
+    </li>
+    {% endfor %}
+  </ol>
+  {% if result.pages > 1 %}
+  <nav class="pager" aria-label="Result pages">
+    {% if result.page > 1 %}<a class="step" rel="prev" {{ hx(page_url(result.page - 1)) }}>← Previous</a>{% else %}<span class="step off">← Previous</span>{% endif %}
+    <span class="nums">
+      {% set lo = [1, result.page - 2]|max %}{% set hi = [result.pages, lo + 4]|min %}{% set lo = [1, hi - 4]|max %}
+      {% if lo > 1 %}<a {{ hx(page_url(1)) }}>1</a>{% if lo > 2 %}<span class="gap">…</span>{% endif %}{% endif %}
+      {% for p in range(lo, hi + 1) %}{% if p == result.page %}<span class="cur" aria-current="page">{{ p }}</span>{% else %}<a {{ hx(page_url(p)) }}>{{ p }}</a>{% endif %}{% endfor %}
+      {% if hi < result.pages %}{% if hi < result.pages - 1 %}<span class="gap">…</span>{% endif %}<a {{ hx(page_url(result.pages)) }}>{{ result.pages }}</a>{% endif %}
+    </span>
+    {% if result.page < result.pages %}<a class="step" rel="next" {{ hx(page_url(result.page + 1)) }}>Next →</a>{% else %}<span class="step off">Next →</span>{% endif %}
+  </nav>
+  {% endif %}
+  {% endif %}
+{% else %}
+  <div class="intro">
+    {% if examples %}
+    <h2>Try a query</h2>
+    <ul class="chips">
+      {% for ex in examples %}<li><a href="/?q={{ ex|urlencode }}" hx-get="/?q={{ ex|urlencode }}" hx-target="#results" hx-swap="outerHTML" hx-push-url="true"><code>{{ ex }}</code></a></li>{% endfor %}
+    </ul>
+    {% endif %}
+    <dl class="facts">
+      <div><dt>Documents</dt><dd>{{ stats.documents|number }}</dd></div>
+      <div><dt>Distinct terms</dt><dd>{{ stats.vocabulary|number }}</dd></div>
+      <div><dt>Words indexed</dt><dd>{{ stats.tokens|number }}</dd></div>
+    </dl>
+  </div>
+{% endif %}
+</section>

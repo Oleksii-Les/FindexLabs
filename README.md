@@ -807,3 +807,122 @@ depth, budget slots, cancellation and client closing, a worker bug surfacing, th
 The tests were also checked by mutation (removing `Retry-After`, retrying 4xx, keeping fragments, dropping `seen`, dropping
 the per-host semaphore, allowing on a 5xx robots.txt, not closing the client: each makes a test fail).
 Not covered, on purpose: the `main()` of `findex.mirror` (it serves until Ctrl+C) and a few defensive branches.
+
+
+
+# Lab 07 — Search on the web (v0.7.0)
+
+**Live service: https://dashboard.render.com/blueprint/new** &nbsp;·&nbsp; API docs: `/api/docs` &nbsp;·&nbsp; health: `/health`
+
+`findex serve` puts the index behind HTTP: a JSON API, an HTML search page with highlighted snippets, and a
+Docker image that runs the same thing on a public host. Code: `src/findex/web/`.
+
+## Quick start
+
+```powershell
+uv run findex index data\gutenberg --out index.bin --positions
+uv run findex serve --index index.bin                 # http://127.0.0.1:8000/   (--port, --workers N)
+curl "http://127.0.0.1:8000/search?q=white+whale&k=5&scorer=bm25&page=1"
+```
+
+Docker (the index is built during `docker build` from 150 Gutenberg books, or bring your own):
+
+```powershell
+docker build -t findex .
+docker run --rm -p 8000:8000 findex
+# own index, no corpus in the image:
+docker build --build-arg GUTENBERG_COUNT=0 -t findex .
+docker run --rm -p 8000:8000 -v "${PWD}:/data:ro" -e INDEX_PATH=/data/index.bin findex
+```
+
+## API
+
+| Route | What it does | Errors |
+| --- | --- | --- |
+| `GET /search?q=&k=&scorer=&page=` | ranked hits, snippets, page / pages / total | 422 bad parameters or query syntax, 503 index not loaded |
+| `GET /docs/{doc_id}?offset=&limit=` | document text in slices | 404 unknown id, 422 |
+| `GET /stats` | documents, terms, cache hits | 503 |
+| `GET /health` | `{"status":"ok","version","documents"}` | 503 while the index is loading |
+| `GET /`, `GET /view/{doc_id}` | HTML page (htmx swaps results without reload) | HTML error pages |
+
+Design notes:
+
+* **lifespan** starts the index load in a background task and closes it on shutdown; the port opens at once, `/health`
+  answers 503 until the index is ready (that is what a platform health check needs).
+* **Pydantic only at the edges** (`schemas.py`: query parameters in, responses out, `Settings` from the environment);
+  inside, the dataclasses of labs 2–3. `Depends(get_service)` is what the tests override — no index file needed.
+* **Unexpected exception** → logged with the request id and stack; the client gets `500 {"detail":"Internal Server
+  Error","request_id":"…"}` and the same id in `X-Request-ID`. No stack, no paths.
+* **Configuration only from environment**: `INDEX_PATH`, `CORPUS_ROOT`, `PORT`, `WEB_CONCURRENCY`, `LOG_LEVEL`,
+  `CACHE_SIZE`, `SNIPPET_WINDOW`, `SITE_NAME`, `EXAMPLE_QUERIES`. A bad value stops start-up naming the variable.
+* **Security**: a pickle index is refused by the server (loading it would execute code); Jinja2 autoescape, highlighting
+  escapes first and only then adds `<mark>`; CSP `script-src 'self'` (htmx is vendored, not loaded from a CDN);
+  `X-Request-ID` from the client is accepted only if it matches `^[A-Za-z0-9._-]{8,64}$`.
+
+## `def` or `async def` for `/search`?
+
+A search is CPU work in pure Python. `experiments/def_vs_async.py` starts a fresh server per variant and sends
+**20 simultaneous requests** (10 rounds of 20 different OR-queries, cache off) while a probe asks `/health` every 10 ms.
+Sandbox machine (2 vCPU, Linux, Python 3.13), median of 3 runs, 588 documents:
+
+| Route | 20 requests take, ms | req/s | search p50, ms | search p95, ms | `/health` p50, ms | `/health` p95, ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `def` | 677 | 30 | 643 | 744 | **9.8** | **32.9** |
+| `async def`, work inline | 494 | 40 | 284 | 534 | **234.7** | **575.0** |
+| `async def` + thread pool | 662 | 30 | 624 | 735 | 10.2 | 34.0 |
+
+The inline `async def` is even a bit *faster* at serving searches (no thread hand-off), but while a search runs the
+event loop does nothing else: the trivial `/health` waited 235 ms at the median (575 ms p95), against 10 ms with `def`.
+Under a platform health check that means "unhealthy" the moment traffic arrives. `def` and `async def` + thread pool
+behave the same (FastAPI runs `def` in a thread pool), so **`def` stays in the code**; only `/health` is `async def`
+because it does no work. (Numbers: this sandbox, not your laptop; re-run the script and replace them.)
+
+## Load test with `oha`
+
+Locally: `bash experiments/oha_local.sh index.bin 15s 20` (20 connections, 15 s, query cache off so every request does
+the work, 3 s warm-up not counted). Same sandbox (2 vCPU), 588 documents, `q=function OR object OR value&k=10`.
+
+| Row | req/s | p50, ms | p95, ms | p99, ms |
+| --- | ---: | ---: | ---: | ---: |
+| 1 worker, `async def` | 133 | 134 | 209 | 345 |
+| 1 worker, `def` | 109 | 176 | 279 | 354 |
+| 1 worker, `def` (the real app, with middleware/logging) | 110 | 178 | 255 | 291 |
+| 4 workers (`findex serve --workers 4`, the real app) | 251 | 61 | 178 | 238 |
+| Deployed service | TODO | TODO | TODO | TODO |
+<!-- TODO: run   oha -z 15s -c 20 --no-tui "https://YOUR-URL/search?q=function+OR+object&k=10"   and fill the last row. -->
+
+How the rows tie to labs 5–6. One worker is one interpreter and **one GIL**: whichever of the threads runs the search
+holds it, so a thread pool does not add search throughput (lab 5: threads do not speed up pure-Python CPU work) — the
+`async def` row is faster on raw throughput only because it skips the thread hand-off, and it pays with a frozen event
+loop (table above). What the thread pool *does* buy is responsiveness: the loop stays free for `/health`, new
+connections and I/O, exactly the lab-6 rule that blocking code must not run on the loop. More **processes** are what add
+CPU: 4 workers gave 2.3x the requests per second and a 3x lower p50 on this 2-core machine (it cannot scale further
+here; the lab-5 process pool scaled in the same way, limited by cores and by memory — each worker holds its own copy of
+the index). On a free cloud plan with a fraction of a CPU expect numbers far below these: that is the last row.
+
+## Deploy
+
+1. Push the repo with `Dockerfile` and `render.yaml`. 2. Render → *New → Blueprint* → pick the repo (or `fly launch
+--copy-config` with `fly.toml`). 3. Health check path is `/health`; all settings are environment variables (see
+`render.yaml`). 4. Logs (request id on every line) are in the platform's *Logs* panel. 5. Put the URL at the top.
+
+Docker notes: two stages (builder with uv: `uv sync --locked --no-dev --no-editable`, then data build; runtime without
+uv), process runs as uid 10001, `HEALTHCHECK` calls `/health`. In the authoring sandbox Docker Hub was unreachable, so the
+image itself was **not built there**; I ran the same `uv sync --locked --no-dev --no-editable` into a clean directory
+without the sources and served from it (health 200, static files and templates present in the wheel).
+
+## Tests
+
+`tests/test_web.py` (45 tests): `TestClient` + `dependency_overrides`, no index file — successful search, pagination,
+scorers, 422 for every bad parameter, 404, `/health` 200/503, clean 500 with the id in the log, request-id handling,
+security headers, HTML pages and XSS escaping, htmx fragment. Two tests build a real tiny index in `tmp_path` to cover
+lifespan and the refused pickle. Whole suite: 398 passed, coverage 96 %; pyright strict and ruff clean.
+
+## Reflection
+
+* *Why does `def` beat `async def` here?* `async def` promises to hand the loop back at every `await`; the search has
+  none, so it keeps the loop for its whole duration. `def` is moved to a thread, so the loop stays free (table above).
+* *Why do threads not make search faster but processes do?* The GIL lets one thread run Python at a time; processes
+  have one GIL each. Cost: memory per worker and a separate cache per worker.
+* *Why validate with Pydantic at the edge only?* Outside input is untrusted and arrives as strings; inside, the types
+  are already guaranteed, so the internal dataclasses stay cheap and the validation cost is paid once per request.

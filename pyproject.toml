@@ -1,6 +1,6 @@
 [project]
 name = "findex"
-version = "0.6.0"
+version = "0.7.0"
 description = "A small full-text search engine: streaming indexer, BM25 ranking, query language, CLI."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -15,10 +15,14 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
+    "fastapi>=0.163.1",
     "httpx>=0.28.1",
+    "jinja2>=3.1.6",
+    "pydantic-settings>=2.16.3",
     "rich>=15.0.0",
     "selectolax>=1.0.2",
     "typer>=0.27.3",
+    "uvicorn[standard]>=0.54.0",
 ]
 
 [project.scripts]
