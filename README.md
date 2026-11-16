@@ -929,8 +929,7 @@ lifespan and the refused pickle. Whole suite: 398 passed, coverage 96 %; pyright
 
 # findex — a small search engine you can read in an afternoon
 
-**Live demo: https://TODO-your-service.onrender.com/** (free tier: the first request after a pause may take a minute)
-<!-- TODO: paste the real address of the deployed v1.0.0 service here, and re-check that the link opens -->
+**Live demo: https://findex-jil3.onrender.com** (free tier: the first request after a pause may take a minute)
 
 An inverted index, BM25 ranking on NumPy, an optional search *by meaning*, a JSON API and a web page — plain Python,
 about 7 000 lines of code and 4 000 of tests, every number below measured and reproducible with one command.
@@ -939,12 +938,12 @@ about 7 000 lines of code and 4 000 of tests, every number below measured and re
 <sub>The GIF is the real page on the 17 006-document test corpus. It shows how the page works, it is not evidence of
 quality: the evidence is the precision table in [Semantic search](#semantic-search-and-what-it-does-not-do-yet).</sub>
 
-<!-- TODO: the three numbers were measured on the 17 006-document sandbox corpus (2 vCPU); re-measure on your Gutenberg corpus and edit them -->
+
 | Corpus | p95 of one search | Biggest speed-up |
 | --- | --- | --- |
 | **17 006 documents**, 46.6 MB, 7.0 M words, 171 k terms | **133 ms** under 20 simultaneous requests (was 1 015 ms) | **58x** for scoring a query (28.7 ms → 0.49 ms) |
 
-Video walk-through (2–3 min): <!-- TODO: link --> · All measurements of labs 1–8 in one place: [docs/results.md](docs/results.md)
+Video walk-through (2–3 min): [docs/profiling.md](docs/findex_full-text_search.mp4) · All measurements of labs 1–8 in one place: [docs/results.md](docs/results.md)
 · Profiling write-up with flame graphs: [docs/profiling.md](docs/profiling.md)
 
 ## The path of the data
